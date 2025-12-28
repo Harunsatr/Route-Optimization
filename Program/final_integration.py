@@ -76,12 +76,14 @@ def validate_solution(instance: dict, distance_data: dict, clusters_data: dict, 
 
 
 def main() -> None:
+    print("PROGRESS:final_integration:0:starting final_integration")
     instance = load_json(INSTANCE_PATH)
     distance_data = load_json(DISTANCE_PATH)
     clusters_data = load_json(CLUSTERS_PATH)
     initial_routes_data = load_json(INITIAL_ROUTES_PATH)
     acs_data = load_json(ACS_PATH)
     rvnd_data = load_json(RVND_PATH)
+    print("PROGRESS:final_integration:20:loaded inputs")
 
     final_routes = []
     total_distance = 0.0
@@ -92,7 +94,7 @@ def main() -> None:
     rvnd_map = {entry["cluster_id"]: entry for entry in rvnd_data["routes"]}
     acs_map = {entry["cluster_id"]: entry for entry in acs_data["clusters"]}
 
-    for cluster in clusters_data["clusters"]:
+    for idx, cluster in enumerate(clusters_data["clusters"]):
         cid = cluster["cluster_id"]
         rvnd_entry = rvnd_map[cid]
         improved = rvnd_entry["improved"]
@@ -116,6 +118,11 @@ def main() -> None:
         total_time_component += improved["total_time_component"]
         total_violation += improved["total_tw_violation"]
         total_objective += improved["objective"]
+        try:
+            pct = 20 + int((idx + 1) / max(1, len(clusters_data.get("clusters", []))) * 70)
+            print(f"PROGRESS:final_integration:{pct}:processed cluster {idx+1}")
+        except Exception:
+            pass
 
     total_cost, fleet_usage = aggregate_costs(instance, final_routes)
     validations = validate_solution(instance, distance_data, clusters_data, final_routes)
@@ -152,6 +159,7 @@ def main() -> None:
         for key, value in validations.items():
             handle.write(f"- {key}: {'PASS' if value else 'FAIL'}\n")
 
+    print("PROGRESS:final_integration:100:done")
     print(
         "final_integration: distance=", round(total_distance, 3),
         ", time_component=", round(total_time_component, 3),

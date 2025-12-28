@@ -8,12 +8,96 @@ all data is consumed from existing artifacts.
 from __future__ import annotations
 
 import json
+import sys
+import threading
+import time
+import importlib.util
 from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+# Compatibility fallback: some Streamlit versions expose `data_editor` instead
+# of `experimental_data_editor`. Ensure the code in tabs using
+# `st.experimental_data_editor` keeps working across versions.
+if not hasattr(st, "experimental_data_editor") and hasattr(st, "data_editor"):
+    st.experimental_data_editor = st.data_editor
+
+
+def _load_agents_module() -> object:
+    agents_path = Path(__file__).resolve().parent / "agents.py"
+    spec = importlib.util.spec_from_file_location("gui_agents", agents_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore
+    return module
+
+
+# Add tabs folder to path for imports
+_tabs_dir = Path(__file__).resolve().parent / "tabs"
+if str(_tabs_dir) not in sys.path:
+    sys.path.insert(0, str(_tabs_dir))
+
+try:
+    from input_titik import render_input_titik
+except ImportError as e:
+    st.error(f"Error loading Input Titik: {e}")
+    render_input_titik = lambda: st.error("Input Titik module not found")
+
+try:
+    from input_data import render_input_data
+except ImportError as e:
+    st.error(f"Error loading Input Data: {e}")
+    render_input_data = lambda: st.error("Input Data module not found")
+
+try:
+    from hasil import render_hasil
+except ImportError as e:
+    st.error(f"Error loading Hasil: {e}")
+    render_hasil = lambda: st.error("Hasil module not found")
+
+try:
+    from graph_hasil import render_graph_hasil
+except ImportError as e:
+    st.error(f"Error loading Graph Hasil: {e}")
+    render_graph_hasil = lambda: st.error("Graph Hasil module not found")
+
+
+def _build_state_from_parsed(instance: Dict, parsed_distance: Dict) -> Dict:
+    points = {"depots": [], "customers": []}
+    if "depot" in instance:
+        points["depots"].append(instance["depot"])
+    for cust in instance.get("customers", []):
+        points["customers"].append(cust)
+
+    inputData = {
+        "customerDemand": [c.get("demand", 0) for c in instance.get("customers", [])],
+        "distanceMatrix": parsed_distance.get("distance_matrix", []),
+    }
+    return {"points": points, "inputData": inputData}
+
+
+def _build_state_from_ui() -> Dict:
+    """Construct the coordinator state from Streamlit session_state (UI editors).
+
+    Looks for `points` and `inputData` (or individual `distanceMatrix` / `customerDemand`).
+    """
+    pts = st.session_state.get("points", {})
+    input_data = st.session_state.get("inputData") or {}
+    # fallback individual keys
+    if not input_data:
+        input_data = {}
+        if "distanceMatrix" in st.session_state:
+            input_data["distanceMatrix"] = st.session_state.get("distanceMatrix")
+        elif "distance_matrix" in st.session_state:
+            input_data["distanceMatrix"] = st.session_state.get("distance_matrix")
+        if "customerDemand" in st.session_state:
+            input_data["customerDemand"] = st.session_state.get("customerDemand")
+        elif "demands" in st.session_state:
+            input_data["customerDemand"] = st.session_state.get("demands")
+    return {"points": pts, "inputData": input_data}
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data" / "processed"
@@ -22,6 +106,7 @@ DOCS_DIR = BASE_DIR / "docs"
 FINAL_SOLUTION_PATH = DATA_DIR / "final_solution.json"
 FINAL_SUMMARY_PATH = DOCS_DIR / "final_summary.md"
 PARSED_INSTANCE_PATH = DATA_DIR / "parsed_instance.json"
+PARSED_DISTANCE_PATH = DATA_DIR / "parsed_distance.json"
 
 
 def load_json(path: Path) -> Dict:
@@ -244,35 +329,168 @@ def main() -> None:
     st.title("MFVRPTW Route Optimization")
     st.caption("Sweep → NN → ACS → RVND")
 
+    # Top-level tabs: input editors and results (fixed four menus)
+    tab1, tab2, tab3, tab4 = st.tabs(["Input Titik", "Input Data", "Hasil", "Graph Hasil"])
+    with tab1:
+        render_input_titik()
+    with tab2:
+        render_input_data()
+    with tab3:
+        render_hasil()
+    with tab4:
+        render_graph_hasil()
+
     if not FINAL_SOLUTION_PATH.exists() or not FINAL_SUMMARY_PATH.exists():
         st.error("Required artifacts not found. Please ensure preprocessing has been completed.")
         return
 
-    final_solution = load_json(FINAL_SOLUTION_PATH)
-    final_summary_md = read_markdown(FINAL_SUMMARY_PATH)
+    # Try to load existing artifacts if present (optional)
+    final_solution = load_json(FINAL_SOLUTION_PATH) if FINAL_SOLUTION_PATH.exists() else None
+    final_summary_md = read_markdown(FINAL_SUMMARY_PATH) if FINAL_SUMMARY_PATH.exists() else ""
+    instance_data = load_json(PARSED_INSTANCE_PATH) if PARSED_INSTANCE_PATH.exists() else None
 
-    if not PARSED_INSTANCE_PATH.exists():
-        st.error("Instance metadata missing (parsed_instance.json required for visualisation).")
-        return
-    instance_data = load_json(PARSED_INSTANCE_PATH)
+    # Pipeline control (validate + run)
+    st.sidebar.markdown("## Pipeline Control")
+    agents = _load_agents_module()
 
-    render_kpis(final_solution["summary"])
+    # Prefer UI-driven state when available
+    state_ui = _build_state_from_ui()
+    has_ui_points = bool(state_ui.get("points") and (
+        state_ui["points"].get("customers") or state_ui["points"].get("depots")
+    ))
+    has_ui_input = bool(state_ui.get("inputData") and (
+        state_ui["inputData"].get("distanceMatrix") or state_ui["inputData"].get("customerDemand")
+    ))
 
-    st.markdown("## Route Visualisation")
-    route_fig = build_route_plot(final_solution, instance_data)
-    st.plotly_chart(route_fig, width="stretch")
+    if has_ui_points and has_ui_input:
+        st.sidebar.markdown("### From UI editors")
+        if st.sidebar.button("Validate UI inputs"):
+            valid, errors = agents.validate_state(state_ui)
+            st.session_state["pipeline_validated_ui"] = valid
+            st.session_state["pipeline_errors_ui"] = errors
+            if not valid:
+                for e in errors:
+                    st.sidebar.error(e)
+            else:
+                st.sidebar.success("Validasi sukses — pipeline dapat dijalankan (UI)")
 
-    route_table = prepare_route_table(final_solution, instance_data)
-    render_cluster_details(route_table)
+        if st.session_state.get("pipeline_validated_ui", False):
+            if st.sidebar.button("Run pipeline (from UI state)"):
+                # start background thread to run pipeline and stream progress
+                if not st.session_state.get("pipeline_running", False):
+                    st.session_state["pipeline_running"] = True
+                    st.session_state.setdefault("pipeline_log", [])
 
-    render_comparison_table(final_summary_md)
+                    def _progress_cb(line: str):
+                        st.session_state.pipeline_log.append(line)
+                        if isinstance(line, str) and line.startswith("PROGRESS:"):
+                            parts = line.split(":", 3)
+                            if len(parts) >= 3:
+                                try:
+                                    pct = int(parts[2])
+                                    st.session_state["pipeline_percent"] = pct
+                                    st.session_state["pipeline_status"] = "running"
+                                except Exception:
+                                    pass
 
-    render_export_section(final_solution, route_table, final_summary_md)
+                    def _runner():
+                        try:
+                            res = agents.run_pipeline(state_ui, progress_callback=_progress_cb)
+                            st.session_state["last_pipeline_result"] = res
+                            st.session_state["pipeline_status"] = "finished"
+                        except Exception as exc:
+                            st.session_state["pipeline_status"] = f"failed: {exc}"
+                        finally:
+                            st.session_state["pipeline_running"] = False
+
+                    thread = threading.Thread(target=_runner, daemon=True)
+                    thread.start()
+
+                else:
+                    st.sidebar.info("Pipeline sudah berjalan")
+
+    # Fallback: operate on parsed files when UI editors not used
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Validate parsed inputs"):
+        if not PARSED_INSTANCE_PATH.exists():
+            st.sidebar.error("parsed_instance.json missing")
+        elif not PARSED_DISTANCE_PATH.exists():
+            st.sidebar.error("parsed_distance.json missing")
+        else:
+            parsed_inst = load_json(PARSED_INSTANCE_PATH)
+            parsed_dist = load_json(PARSED_DISTANCE_PATH)
+            state = _build_state_from_parsed(parsed_inst, parsed_dist)
+            valid, errors = agents.validate_state(state)
+            st.session_state["pipeline_validated"] = valid
+            st.session_state["pipeline_errors"] = errors
+            if not valid:
+                for e in errors:
+                    st.sidebar.error(e)
+            else:
+                st.sidebar.success("Validasi sukses — pipeline dapat dijalankan")
+
+    if st.session_state.get("pipeline_validated", False):
+        if st.sidebar.button("Run pipeline (from parsed files)"):
+            if not st.session_state.get("pipeline_running", False):
+                st.session_state["pipeline_running"] = True
+                st.session_state.setdefault("pipeline_log", [])
+
+                parsed_inst = load_json(PARSED_INSTANCE_PATH)
+                parsed_dist = load_json(PARSED_DISTANCE_PATH)
+
+                def _progress_cb(line: str):
+                    st.session_state.pipeline_log.append(line)
+                    if isinstance(line, str) and line.startswith("PROGRESS:"):
+                        parts = line.split(":", 3)
+                        if len(parts) >= 3:
+                            try:
+                                pct = int(parts[2])
+                                st.session_state["pipeline_percent"] = pct
+                                st.session_state["pipeline_status"] = "running"
+                            except Exception:
+                                pass
+
+                def _runner_parsed():
+                    try:
+                        res = agents.run_pipeline(_build_state_from_parsed(parsed_inst, parsed_dist), progress_callback=_progress_cb)
+                        st.session_state["last_pipeline_result"] = res
+                        st.session_state["pipeline_status"] = "finished"
+                    except Exception as exc:
+                        st.session_state["pipeline_status"] = f"failed: {exc}"
+                    finally:
+                        st.session_state["pipeline_running"] = False
+
+                thread = threading.Thread(target=_runner_parsed, daemon=True)
+                thread.start()
+            else:
+                st.sidebar.info("Pipeline sudah berjalan")
+
+    # If a pipeline run produced a fresh result, prefer it for display
+    if st.session_state.get("last_pipeline_result"):
+        st.session_state.setdefault("result", st.session_state.get("last_pipeline_result"))
+
+    # Pipeline runtime status and logs
+    status = st.session_state.get("pipeline_status", "idle")
+    running = st.session_state.get("pipeline_running", False)
+    if running:
+        st.sidebar.markdown("### Pipeline running")
+        st.sidebar.info("Pipeline is running in background")
+    pct = st.session_state.get("pipeline_percent", 0)
+    if pct:
+        st.sidebar.progress(pct)
+    if st.session_state.get("pipeline_log"):
+        with st.sidebar.expander("Pipeline Log", expanded=False):
+            for line in st.session_state.pipeline_log[-200:]:
+                st.text(line)
+    if status.startswith("failed"):
+        st.sidebar.error(status)
+    elif status == "finished":
+        st.sidebar.success("Pipeline finished — results loaded")
 
     st.sidebar.header("About")
     st.sidebar.info(
-        "This dashboard presents pre-computed MFVRPTW results using the "
-        "document-specified pipeline. No optimisation is performed in the UI."
+        "This dashboard provides UI for manual inputs and displays stored results. "
+        "Computation runs only when triggered from the 'Input Data' menu."
     )
 
 

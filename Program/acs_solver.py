@@ -242,10 +242,12 @@ def acs_cluster(cluster: dict, instance: dict, distance_data: dict, initial_rout
 
 
 def main() -> None:
+    print("PROGRESS:acs_solver:0:starting acs_solver")
     instance = load_json(INSTANCE_PATH)
     distance_data = load_json(DISTANCE_PATH)
     clusters_data = load_json(CLUSTERS_PATH)
     initial_routes_data = load_json(INITIAL_ROUTES_PATH)
+    print("PROGRESS:acs_solver:20:loaded inputs")
     acs_params = instance["acs_parameters"]
 
     rng = random.Random(42)
@@ -256,12 +258,18 @@ def main() -> None:
     total_violation = 0.0
     total_distance = 0.0
 
-    for cluster in clusters_data["clusters"]:
+    total_clusters = len(clusters_data.get("clusters", []))
+    for idx, cluster in enumerate(clusters_data["clusters"]):
         cluster_id = cluster["cluster_id"]
         metrics = acs_cluster(cluster, instance, distance_data, initial_route_map[cluster_id], acs_params, rng)
         results.append(metrics)
         total_violation += metrics["total_tw_violation"]
         total_distance += metrics["total_distance"]
+        try:
+            pct = 20 + int((idx + 1) / max(1, total_clusters) * 70)
+            print(f"PROGRESS:acs_solver:{pct}:processed cluster {idx+1}/{total_clusters}")
+        except Exception:
+            pass
 
     output = {
         "clusters": results,
@@ -276,6 +284,7 @@ def main() -> None:
 
     with ACS_RESULTS_PATH.open("w", encoding="utf-8") as handle:
         json.dump(output, handle, indent=2)
+    print("PROGRESS:acs_solver:100:done")
 
     print(
         "acs_solver: clusters=", len(results),

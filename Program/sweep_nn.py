@@ -211,14 +211,20 @@ def save_initial_routes(routes: List[dict]) -> None:
 
 
 def main() -> None:
+    print("PROGRESS:sweep_nn:0:starting sweep_nn")
     instance = load_json(INSTANCE_PATH)
     distance_data = load_json(DISTANCE_PATH)
+    print("PROGRESS:sweep_nn:20:loaded inputs")
 
     clusters, fleet_usage = build_clusters(instance)
+    print(f"PROGRESS:sweep_nn:50:built {len(clusters)} clusters")
+
     routes = [nearest_neighbor_route(cluster, instance, distance_data) for cluster in clusters]
+    print("PROGRESS:sweep_nn:80:constructed initial routes")
 
     save_clusters(clusters, fleet_usage)
     save_initial_routes(routes)
+    print("PROGRESS:sweep_nn:100:done")
 
     total_demand = sum(cluster["total_demand"] for cluster in clusters)
     violations = sum(route["total_tw_violation"] for route in routes)

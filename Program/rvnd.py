@@ -161,49 +161,50 @@ def apply_relocate(sequence: List[int], i: int, j: int) -> List[int]:
     new_sequence = sequence[:]
     node = new_sequence.pop(i)
     if j > i:
-        j -= 1
-    new_sequence.insert(j, node)
+        new_sequence.insert(j - 1, node)
+    else:
+        new_sequence.insert(j, node)
     return new_sequence
 
 
-def neighborhood_moves(name: str, sequence: List[int]):
-    if name == "two_opt":
-        for i, j in two_opt(sequence):
-            yield apply_two_opt(sequence, i, j)
-    elif name == "swap":
-        for i, j in swap_moves(sequence):
-            yield apply_swap(sequence, i, j)
-    elif name == "relocate":
-        for i, j in relocate_moves(sequence):
-            yield apply_relocate(sequence, i, j)
-    else:
-        raise ValueError(f"Unknown neighborhood {name}")
-
-
-def rvnd_route(route: dict, instance: dict, distance_data: dict, rng: random.Random) -> dict:
-    best_metrics = evaluate_route(route["sequence"], instance, distance_data)
-    best_sequence = best_metrics["sequence"][:]
-
-    neighborhoods = NEIGHBORHOODS[:]
-
+def rvnd_route(route: Dict, instance: Dict, distance_data: Dict, rng: random.Random) -> Dict:
+    """Apply RVND to improve route."""
+    sequence = deepcopy(route["sequence"])
+    
+    # Get baseline
+    baseline = evaluate_route(sequence, instance, distance_data)
+    best_solution = sequence[:]
+    best_distance = baseline["total_distance"]
+    
     improved = True
-    while improved:
+    iterations = 0
+    max_iterations = 100
+    
+    while improved and iterations < max_iterations:
         improved = False
-        rng.shuffle(neighborhoods)
-        for neighborhood in neighborhoods:
-            improved_neighborhood = False
-            for candidate_sequence in neighborhood_moves(neighborhood, best_sequence):
-                metrics = evaluate_route(candidate_sequence, instance, distance_data)
-                if metrics["objective"] + 1e-9 < best_metrics["objective"]:
-                    best_metrics = metrics
-                    best_sequence = candidate_sequence
+        iterations += 1
+        
+        for neighborhood_func in [two_opt, swap_moves, relocate_moves]:
+            for move in neighborhood_func(best_solution):
+                if neighborhood_func == two_opt:
+                    new_solution = apply_two_opt(best_solution, move[0], move[1])
+                elif neighborhood_func == swap_moves:
+                    new_solution = apply_swap(best_solution, move[0], move[1])
+                else:
+                    new_solution = apply_relocate(best_solution, move[0], move[1])
+                
+                new_metrics = evaluate_route(new_solution, instance, distance_data)
+                if new_metrics["total_distance"] < best_distance:
+                    best_solution = new_solution
+                    best_distance = new_metrics["total_distance"]
                     improved = True
-                    improved_neighborhood = True
                     break
-            if improved_neighborhood:
+            
+            if improved:
                 break
-
-    return best_metrics
+    
+    final_metrics = evaluate_route(best_solution, instance, distance_data)
+    return final_metrics
 
 
 def main() -> None:

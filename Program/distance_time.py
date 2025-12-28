@@ -67,11 +67,16 @@ def save_distance_data(nodes: list, distance_matrix: list, travel_matrix: list, 
 
 
 def main() -> None:
+    print("PROGRESS:distance_time:0:starting distance_time")
     instance = load_instance(INSTANCE_PATH)
+    print("PROGRESS:distance_time:20:loaded instance")
     nodes = extract_nodes(instance)
+    print(f"PROGRESS:distance_time:40:extracted {len(nodes)} nodes")
     distance_matrix = compute_distance_matrix(nodes)
     travel_matrix = compute_travel_time_matrix(distance_matrix)
+    print("PROGRESS:distance_time:80:computed matrices")
     save_distance_data(nodes, distance_matrix, travel_matrix, DISTANCE_PATH)
+    print("PROGRESS:distance_time:100:done")
     print(f"distance_time: nodes={len(nodes)}, matrix={len(distance_matrix)}x{len(distance_matrix)}")
 
 
