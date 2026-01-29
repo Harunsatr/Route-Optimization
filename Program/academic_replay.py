@@ -49,9 +49,9 @@ ACADEMIC_DATASET = {
         {"id": 10, "name": "C10", "x": 5.0, "y": 9.0, "demand": 35, "service_time": 14, "time_window": {"start": "09:00", "end": "17:00"}}
     ],
     "fleet": [
-        {"id": "A", "capacity": 60, "units": 2, "fixed_cost": 50000, "variable_cost_per_km": 1000},
-        {"id": "B", "capacity": 100, "units": 2, "fixed_cost": 60000, "variable_cost_per_km": 1000},
-        {"id": "C", "capacity": 150, "units": 1, "fixed_cost": 70000, "variable_cost_per_km": 1000}
+        {"id": "A", "capacity": 60, "units": 2, "fixed_cost": 50000, "variable_cost_per_km": 1000, "available_from": "08:00", "available_until": "17:00"},
+        {"id": "B", "capacity": 100, "units": 2, "fixed_cost": 60000, "variable_cost_per_km": 1000, "available_from": "08:00", "available_until": "17:00"},
+        {"id": "C", "capacity": 150, "units": 1, "fixed_cost": 70000, "variable_cost_per_km": 1000, "available_from": "08:00", "available_until": "17:00"}
     ],
     "acs_parameters": {
         "alpha": 0.5,
@@ -219,21 +219,160 @@ def build_distance_matrix(dataset: Dict) -> List[List[float]]:
 
 
 # ============================================================
+# VEHICLE AVAILABILITY FUNCTIONS
+# ============================================================
+
+def is_vehicle_available(vehicle: Dict) -> bool:
+    """
+    Check if a vehicle is available (has valid availability times).
+    If available_from or available_until is empty/None, vehicle is NOT available.
+    """
+    available_from = vehicle.get("available_from", "")
+    available_until = vehicle.get("available_until", "")
+    
+    # Vehicle is available only if BOTH times are specified
+    return bool(available_from and available_until)
+
+
+def get_vehicle_availability_minutes(vehicle: Dict) -> Tuple[float, float]:
+    """
+    Get vehicle availability window in minutes from midnight.
+    Returns (start_minutes, end_minutes).
+    """
+    if not is_vehicle_available(vehicle):
+        return (0, 0)
+    
+    start = parse_time_to_minutes(vehicle["available_from"])
+    end = parse_time_to_minutes(vehicle["available_until"])
+    return (start, end)
+
+
+def does_route_fit_vehicle_availability(
+    route_start_time: float, 
+    route_end_time: float, 
+    vehicle: Dict
+) -> bool:
+    """
+    Check if a route's service timeline fits within vehicle availability.
+    
+    Args:
+        route_start_time: Route departure time in minutes from midnight
+        route_end_time: Route return time to depot in minutes from midnight
+        vehicle: Vehicle dict with available_from and available_until
+    
+    Returns:
+        True if route fits within vehicle availability window
+    """
+    if not is_vehicle_available(vehicle):
+        return False
+    
+    veh_start, veh_end = get_vehicle_availability_minutes(vehicle)
+    
+    # Route must start after vehicle becomes available
+    # Route must end before vehicle availability ends
+    return route_start_time >= veh_start and route_end_time <= veh_end
+
+
+def get_available_vehicles(fleet: List[Dict]) -> List[Dict]:
+    """
+    Filter fleet to only include available vehicles.
+    A vehicle is available if it has both available_from and available_until set.
+    """
+    available = []
+    for vehicle in fleet:
+        if is_vehicle_available(vehicle):
+            available.append(vehicle)
+    return available
+
+
+def get_vehicle_availability_status(fleet: List[Dict]) -> List[Dict]:
+    """
+    Get availability status for all vehicles (for display).
+    """
+    status_list = []
+    for vehicle in fleet:
+        available = is_vehicle_available(vehicle)
+        status = {
+            "vehicle_id": vehicle["id"],
+            "capacity": vehicle["capacity"],
+            "units": vehicle.get("units", 1),
+            "available": available,
+            "available_from": vehicle.get("available_from", ""),
+            "available_until": vehicle.get("available_until", ""),
+            "status": "✅ Available" if available else "❌ Not Available"
+        }
+        if available:
+            status["time_window"] = f"{vehicle['available_from']} – {vehicle['available_until']}"
+        else:
+            status["time_window"] = "(Not Set)"
+        status_list.append(status)
+    return status_list
+
+
+# ============================================================
 # SWEEP ALGORITHM (DETERMINISTIC)
 # ============================================================
 
-def get_vehicle_type_for_demand(demand: int, fleet: List[Dict]) -> str:
+def get_vehicle_type_for_demand(
+    demand: int, 
+    fleet: List[Dict], 
+    route_start_time: float = 480.0,  # Default 08:00
+    route_end_time: float = 1020.0,   # Default 17:00
+    check_availability: bool = True
+) -> Tuple[str, str]:
     """
     Get appropriate vehicle type for given demand.
-    Vehicle A: capacity <= 60
-    Vehicle B: capacity 60-100
-    Vehicle C: capacity 100-150
+    Checks: capacity constraint AND availability time constraint.
+    
+    Args:
+        demand: Total demand of the route
+        fleet: Fleet data with capacity and availability times
+        route_start_time: Route departure time in minutes from midnight
+        route_end_time: Route return time to depot in minutes from midnight
+        check_availability: Whether to check vehicle availability time
+    
+    Returns:
+        Tuple of (vehicle_id, selection_reason)
+    
+    Selection Rules:
+    1. Filter by availability (if check_availability=True)
+    2. Filter by capacity (demand <= capacity)
+    3. Select smallest capacity vehicle from remaining
     """
-    sorted_fleet = sorted(fleet, key=lambda v: v["capacity"])
+    # Get available vehicles only
+    if check_availability:
+        available_fleet = get_available_vehicles(fleet)
+    else:
+        available_fleet = fleet
+    
+    if not available_fleet:
+        return (None, "No vehicles available (all have empty availability times)")
+    
+    # Sort by capacity (ascending) to prefer smallest feasible vehicle
+    sorted_fleet = sorted(available_fleet, key=lambda v: v["capacity"])
+    
     for vehicle in sorted_fleet:
-        if demand <= vehicle["capacity"]:
-            return vehicle["id"]
-    return sorted_fleet[-1]["id"]  # Largest vehicle if none fit
+        # Check capacity
+        if demand > vehicle["capacity"]:
+            continue
+        
+        # Check availability time window if enabled
+        if check_availability:
+            if not does_route_fit_vehicle_availability(route_start_time, route_end_time, vehicle):
+                continue
+        
+        # Vehicle is valid
+        reason = f"Demand {demand} fits in {vehicle['id']} (capacity ≤ {vehicle['capacity']})"
+        if check_availability:
+            reason += f", available {vehicle['available_from']}–{vehicle['available_until']}"
+        return (vehicle["id"], reason)
+    
+    # No vehicle fits - return largest available as fallback
+    if sorted_fleet:
+        largest = sorted_fleet[-1]
+        return (largest["id"], f"Demand {demand} exceeds all capacities, using largest: {largest['id']}")
+    
+    return (None, "No feasible vehicle found")
 
 
 def academic_sweep(dataset: Dict) -> Tuple[List[Dict], List[Dict]]:
@@ -1325,28 +1464,68 @@ def apply_intra_neighborhood(
 
 def reassign_vehicles(
     routes: List[Dict],
-    dataset: Dict
+    dataset: Dict,
+    check_availability: bool = True
 ) -> Tuple[List[Dict], List[Dict]]:
-    """Reassign vehicles based on route demand."""
+    """
+    Reassign vehicles based on route demand AND availability time.
+    
+    Selection Criteria:
+    1. Vehicle must be AVAILABLE (non-empty availability time)
+    2. Vehicle capacity must fit route demand
+    3. Vehicle availability time must cover route time window
+    4. Select smallest feasible vehicle (efficiency)
+    """
     iteration_logs = []
     fleet = dataset["fleet"]
     
-    fleet_sorted = sorted(fleet, key=lambda f: f["capacity"])
-    available = {f["id"]: f["units"] for f in fleet}
+    # Filter to available vehicles only
+    if check_availability:
+        available_fleet = get_available_vehicles(fleet)
+    else:
+        available_fleet = fleet
+    
+    fleet_sorted = sorted(available_fleet, key=lambda f: f["capacity"])
+    available_units = {f["id"]: f["units"] for f in available_fleet}
     
     for route in routes:
         demand = route["total_demand"]
-        old_vehicle = route["vehicle_type"]
+        old_vehicle = route.get("vehicle_type", "?")
         
-        # Find smallest feasible vehicle
+        # Estimate route time window (from travel time + service time)
+        route_start = 480.0  # 08:00 default departure
+        total_time = route.get("total_time", 0) or route.get("total_distance", 0) * 2  # Estimate
+        route_end = route_start + total_time
+        
+        # Find smallest feasible and available vehicle
         new_vehicle = None
+        selection_reason = ""
+        
         for f in fleet_sorted:
-            if f["capacity"] >= demand and available[f["id"]] > 0:
-                new_vehicle = f["id"]
-                break
+            vehicle_id = f["id"]
+            
+            # Check unit availability
+            if available_units.get(vehicle_id, 0) <= 0:
+                continue
+            
+            # Check capacity
+            if f["capacity"] < demand:
+                continue
+            
+            # Check availability time window (if enabled)
+            if check_availability:
+                if not does_route_fit_vehicle_availability(route_start, route_end, f):
+                    continue
+            
+            # Vehicle is feasible
+            new_vehicle = vehicle_id
+            selection_reason = f"Demand {demand} ≤ capacity {f['capacity']}"
+            if check_availability and f.get("available_from") and f.get("available_until"):
+                selection_reason += f", available {f['available_from']}–{f['available_until']}"
+            break
         
         if new_vehicle:
-            available[new_vehicle] -= 1
+            available_units[new_vehicle] -= 1
             route["vehicle_type"] = new_vehicle
             
             iteration_logs.append({
@@ -1355,7 +1534,19 @@ def reassign_vehicles(
                 "demand": demand,
                 "old_vehicle": old_vehicle,
                 "new_vehicle": new_vehicle,
-                "reason": f"Demand {demand} fits in {new_vehicle} (capacity ≤ {next(f['capacity'] for f in fleet if f['id'] == new_vehicle)})"
+                "reason": selection_reason,
+                "status": "✅ Assigned"
+            })
+        else:
+            # No vehicle available - keep old or mark as error
+            iteration_logs.append({
+                "phase": "VEHICLE_REASSIGN",
+                "cluster_id": route["cluster_id"],
+                "demand": demand,
+                "old_vehicle": old_vehicle,
+                "new_vehicle": None,
+                "reason": "No feasible vehicle: all unavailable or insufficient capacity",
+                "status": "❌ No Vehicle"
             })
     
     return routes, iteration_logs
@@ -1498,6 +1689,44 @@ def run_academic_replay() -> Dict:
     
     all_logs = []
     
+    # ============================================================
+    # 0. VEHICLE AVAILABILITY CHECK (NEW!)
+    # ============================================================
+    print("\n[0/5] Checking Vehicle Availability...")
+    fleet = dataset["fleet"]
+    availability_status = get_vehicle_availability_status(fleet)
+    available_fleet = get_available_vehicles(fleet)
+    
+    # Log availability status
+    for status in availability_status:
+        all_logs.append({
+            "phase": "VEHICLE_AVAILABILITY",
+            "vehicle_id": status["vehicle_id"],
+            "capacity": status["capacity"],
+            "units": status.get("units", 1),
+            "available": status["available"],
+            "time_window": status.get("time_window", "Not Set"),
+            "status": status["status"]
+        })
+        
+        icon = "✅" if status["available"] else "❌"
+        print(f"   {icon} Vehicle {status['vehicle_id']}: {status['status']}")
+    
+    print(f"   → {len(available_fleet)}/{len(fleet)} vehicle types available for routing")
+    
+    if len(available_fleet) == 0:
+        print("   ❌ CRITICAL: No vehicles available! Cannot proceed with routing.")
+        return {
+            "mode": "ACADEMIC_REPLAY",
+            "error": "No vehicles available",
+            "vehicle_availability": availability_status,
+            "dataset": dataset,
+            "clusters": [],
+            "routes": [],
+            "costs": {"total_cost": 0},
+            "iteration_logs": all_logs
+        }
+    
     # 1. SWEEP CLUSTERING
     print("\n[1/5] Running SWEEP algorithm...")
     clusters, sweep_logs = academic_sweep(dataset)
@@ -1622,6 +1851,8 @@ def run_academic_replay() -> Dict:
     # Save results
     output = {
         "mode": "ACADEMIC_REPLAY",
+        "vehicle_availability": availability_status,
+        "available_vehicles": [v["id"] for v in available_fleet],
         "dataset": dataset,
         "clusters": clusters,
         "routes": final_routes,

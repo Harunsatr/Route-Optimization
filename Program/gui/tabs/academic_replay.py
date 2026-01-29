@@ -378,9 +378,81 @@ def _display_vehicle_assignment(logs: List[Dict]) -> None:
             "Demand": l["demand"],
             "Old Vehicle": l["old_vehicle"],
             "New Vehicle": l["new_vehicle"],
+            "Status": l.get("status", "✅"),
             "Reason": l["reason"]
         } for l in vehicle_logs])
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def _display_vehicle_availability(result: Dict[str, Any]) -> None:
+    """Display vehicle availability schedule and status."""
+    st.markdown("### 🕐 Vehicle Availability Schedule")
+    st.markdown("*Waktu Ketersediaan Jenis Kendaraan pada Hari Itu*")
+    
+    availability = result.get("vehicle_availability", [])
+    available_vehicles = result.get("available_vehicles", [])
+    
+    if not availability:
+        # Fallback: extract from logs
+        logs = result.get("iteration_logs", [])
+        availability = [l for l in logs if l.get("phase") == "VEHICLE_AVAILABILITY"]
+    
+    if not availability:
+        st.info("Tidak ada data ketersediaan kendaraan.")
+        return
+    
+    # Display availability table
+    df = pd.DataFrame([{
+        "Kendaraan": a.get("vehicle_id", "?"),
+        "Kapasitas": a.get("capacity", 0),
+        "Unit": a.get("units", 1),
+        "Waktu Tersedia": a.get("time_window", "-"),
+        "Status": a.get("status", "?")
+    } for a in availability])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    # Summary metrics
+    total_vehicles = len(availability)
+    available_count = sum(1 for a in availability if a.get("available", False))
+    unavailable_count = total_vehicles - available_count
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Jenis Kendaraan", total_vehicles)
+    with col2:
+        st.metric("Tersedia untuk Routing", available_count, delta=None)
+    with col3:
+        if unavailable_count > 0:
+            st.metric("Tidak Tersedia", unavailable_count, delta="⚠️", delta_color="inverse")
+        else:
+            st.metric("Tidak Tersedia", 0)
+    
+    # Availability explanation
+    st.markdown("---")
+    st.markdown("#### 📋 Penjelasan Ketersediaan")
+    
+    for a in availability:
+        vehicle_id = a.get("vehicle_id", "?")
+        available = a.get("available", False)
+        time_window = a.get("time_window", "Tidak diset")
+        capacity = a.get("capacity", 0)
+        units = a.get("units", 1)
+        
+        if available:
+            st.success(f"**Kendaraan {vehicle_id}** (kapasitas ≤ {capacity}, {units} unit): "
+                      f"✅ TERSEDIA pada {time_window}. "
+                      f"Kendaraan ini dapat digunakan untuk routing.")
+        else:
+            st.warning(f"**Kendaraan {vehicle_id}** (kapasitas ≤ {capacity}, {units} unit): "
+                      f"❌ TIDAK TERSEDIA - {time_window}. "
+                      f"Kendaraan ini TIDAK akan digunakan dalam routing.")
+    
+    # Used vehicles summary
+    if available_vehicles:
+        st.markdown("---")
+        st.info(f"**Kendaraan yang Digunakan:** {', '.join(available_vehicles)}")
+    else:
+        st.error("**⚠️ Tidak ada kendaraan yang tersedia untuk routing!**")
 
 
 def _display_final_results(result: Dict[str, Any]) -> None:
@@ -520,7 +592,8 @@ def render_academic_replay() -> None:
     logs = result.get("iteration_logs", [])
     
     # Create tabs for each phase
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "🕐 Availability",
         "📐 Sweep", 
         "🔗 NN", 
         "🐜 ACS", 
@@ -529,6 +602,9 @@ def render_academic_replay() -> None:
         "📊 Final Results",
         "✅ Validation"
     ])
+    
+    with tab0:
+        _display_vehicle_availability(result)
     
     with tab1:
         _display_sweep_iterations(logs)
