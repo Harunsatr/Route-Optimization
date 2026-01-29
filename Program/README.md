@@ -1,19 +1,48 @@
-# MFVRPTW - Multi-Fleet Vehicle Routing Problem with Time Windows
+# 🚛 MFVRPTW - Multi-Fleet Vehicle Routing Problem with Time Windows
+
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mfvrptw-optimizer.streamlit.app)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Sistem optimasi rute untuk distribusi obat dari gudang ke berbagai pelanggan (rumah sakit, klinik, puskesmas) menggunakan berbagai jenis kendaraan dengan batasan kapasitas dan time windows.
+
+## 🌐 Live Demo
+
+**[🚀 Akses Aplikasi di Streamlit Cloud](https://mfvrptw-optimizer.streamlit.app)**
+
+---
 
 ## 📋 Deskripsi Program
 
 Program ini menyelesaikan masalah **Multi-Fleet Vehicle Routing Problem with Time Windows (MFVRPTW)** - sebuah masalah optimasi yang kompleks untuk menemukan rute distribusi paling efisien dengan:
 
-- **Multi-Fleet**: Menggunakan berbagai jenis kendaraan (Motor, Mobil Kecil, Mobil Besar) dengan kapasitas dan biaya berbeda
-- **Time Windows**: Setiap pelanggan memiliki waktu layanan yang harus dipenuhi
-- **Kapasitas**: Setiap kendaraan memiliki batasan kapasitas maksimal
-- **Optimasi Biaya**: Meminimalkan biaya tetap (fixed cost) dan biaya variabel (per km)
+| Feature | Description |
+|---------|-------------|
+| 🚗 **Multi-Fleet** | Menggunakan berbagai jenis kendaraan (Motor, Mobil Kecil, Mobil Besar) dengan kapasitas dan biaya berbeda |
+| ⏰ **Time Windows** | Setiap pelanggan memiliki waktu layanan yang harus dipenuhi |
+| 📦 **Kapasitas** | Setiap kendaraan memiliki batasan kapasitas maksimal |
+| 💰 **Optimasi Biaya** | Meminimalkan biaya tetap (fixed cost) dan biaya variabel (per km) |
 
-### 🎯 Pipeline Optimasi
+---
+
+## 🎯 Pipeline Optimasi
 
 Program ini menggunakan algoritma multi-tahap untuk menghasilkan solusi optimal:
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  1. Distance    │     │  2. Sweep       │     │  3. Nearest     │
+│     Matrix      │ ──► │     Clustering  │ ──► │     Neighbor    │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                                                        │
+                                                        ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  6. Final       │     │  5. RVND        │     │  4. ACS         │
+│     Solution    │ ◄── │     Optimizer   │ ◄── │     Optimizer   │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+### Algoritma Detail:
 
 1. **Perhitungan Matriks Jarak & Waktu** (`distance_time.py`)
    - Menghitung jarak Euclidean dari koordinat
@@ -26,335 +55,276 @@ Program ini menggunakan algoritma multi-tahap untuk menghasilkan solusi optimal:
 
 3. **Nearest Neighbor (NN)** (`sweep_nn.py`)
    - Inisialisasi rute awal untuk setiap cluster
-   - Membuat urutan kunjungan pelanggan
+   - **Time Window Aware**: Menolak pelanggan jika arrival > TW_end (hard constraint)
 
 4. **Ant Colony System (ACS)** (`acs_solver.py`)
    - Optimasi rute per cluster
-   - Parameter: m=2, α=1, β=2, ρ=0.2, q₀=0.85, iterasi=2
+   - Parameter: m=2, α=0.5, β=2, ρ=0.2, q₀=0.85, iterasi=2
 
-5. **RVND (Randomized Variable Neighborhood Descent)** (`rvnd.py`) - **REVISED v2.0**
+5. **RVND (Randomized Variable Neighborhood Descent)** (`rvnd.py`) - **v2.0**
    - **Two-level local search** dengan strict neighborhood management
-   - **Intra-route neighborhoods**:
-     - 2-opt: Membalikkan segmen rute
-     - Or-opt: Relokasi 1-3 pelanggan berurutan
-     - Reinsertion: Memindahkan satu pelanggan
-     - Exchange: Menukar dua pelanggan
-   - **Inter-route neighborhoods** (untuk multi-route):
-     - shift(1,0), shift(2,0): Pindahkan pelanggan antar rute
-     - swap(1,1), swap(2,1), swap(2,2): Tukar pelanggan antar rute
-     - cross: Cross-exchange antar rute
-   - **Fitur utama**:
-     - Iteration control dengan early stopping
-     - Strict feasibility checking (capacity + time windows)
-     - Deterministic behavior (seeded RNG)
-     - Hanya menerima solusi feasible yang lebih baik
-   - **Dokumentasi lengkap**: Lihat [docs/rvnd_specification.md](docs/rvnd_specification.md)
+   - **Intra-route**: 2-opt, Or-opt, Reinsertion, Exchange
+   - **Inter-route**: shift(1,0), shift(2,0), swap(1,1), swap(2,1), swap(2,2), cross
+   - **Hard constraint** pada kapasitas, soft constraint pada time windows
 
 6. **Final Integration** (`final_integration.py`)
    - Menggabungkan semua hasil
    - Validasi solusi
    - Menghasilkan laporan final
 
-### 📊 Dashboard Interaktif
+---
+
+## 🎓 Academic Replay Mode (NEW!)
+
+Fitur khusus untuk **validasi akademis** dengan langkah-langkah deterministik:
+
+| Feature | Description |
+|---------|-------------|
+| 📝 **NN_TW_AWARE** | Nearest Neighbor dengan hard constraint time window |
+| 🐜 **ACS_REPLAY** | Rute predefined sesuai dokumen Word |
+| 🔄 **RVND_REPLAY** | Swap pairs predefined dengan capacity hard constraint |
+| ⏰ **Time Window Analysis** | Analisis detail kepatuhan time window per pelanggan |
+
+---
+
+## 📊 Dashboard Interaktif
 
 Program dilengkapi dengan GUI berbasis **Streamlit** yang menampilkan:
-- Input data pelanggan dan koordinat
-- Visualisasi rute di peta
-- Tabel detail rute per kendaraan
-- Grafik perbandingan biaya
-- Statistik dan metrik optimasi
 
-## 🚀 Instalasi
+| Tab | Fitur |
+|-----|-------|
+| 📍 **Input Titik** | Input koordinat depot dan pelanggan |
+| 📋 **Input Data** | Input data pelanggan (demand, time windows, service time) |
+| 📈 **Hasil** | Tabel detail rute per kendaraan |
+| 🗺️ **Graph Hasil** | Visualisasi rute dengan Plotly |
+| 🎓 **Academic Replay** | Mode replay untuk validasi akademis |
 
-### Prasyarat
+---
 
-- Python 3.8 atau lebih tinggi
-- pip (Python package manager)
+## 🚀 Quick Start
 
-### Langkah Instalasi
+### Opsi 1: Akses Online (Recommended)
+Langsung akses aplikasi di **[Streamlit Cloud](https://mfvrptw-optimizer.streamlit.app)** - tidak perlu instalasi!
 
-1. Clone repository ini:
+### Opsi 2: Instalasi Lokal
+
 ```bash
-git clone https://github.com/Harunsatr/RVND.git
-cd RVND
-```
+# 1. Clone repository
+git clone https://github.com/Harunsatr/Route-Optimization.git
+cd Route-Optimization/Program
 
-2. Buat virtual environment (opsional tapi direkomendasikan):
-```bash
-# Windows PowerShell
+# 2. Buat virtual environment (opsional tapi direkomendasikan)
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.venv\Scripts\activate  # Windows
+source .venv/bin/activate  # Linux/Mac
 
-# Windows CMD
-python -m venv .venv
-.venv\Scripts\activate.bat
-
-# Linux/Mac
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
+# 3. Install dependencies
 pip install -r requirements.txt
-```
 
-Jika file `requirements.txt` tidak ada, install manual:
-```bash
-pip install streamlit plotly pandas numpy
-```
-
-## 💻 Cara Menjalankan Program
-
-### Opsi 1: Menjalankan Dashboard (Recommended)
-
-Dashboard sudah berisi hasil optimasi yang telah dihitung. Cukup jalankan:
-
-```bash
-# Dari root folder project
+# 4. Jalankan aplikasi
 streamlit run gui/app.py
-```
-
-Atau jika Anda menggunakan virtual environment:
-
-```bash
-# Windows
-.\.venv\Scripts\streamlit.exe run gui\app.py
-
-# Linux/Mac
-.venv/bin/streamlit run gui/app.py
 ```
 
 Dashboard akan terbuka di browser pada `http://localhost:8501`
 
-### Opsi 2: Menjalankan Pipeline Optimasi (Opsional)
-
-Jika Anda ingin menghitung ulang optimasi dari awal:
-
-```bash
-# Jalankan script secara berurutan
-python distance_time.py
-python sweep_nn.py
-python acs_solver.py
-python rvnd.py
-python final_integration.py
-```
-
-⚠️ **Catatan**: Hasil optimasi sudah tersimpan di folder `data/processed/`. Anda hanya perlu menjalankan pipeline ini jika ingin mengubah data input atau parameter algoritma.
+---
 
 ## 📁 Struktur Folder
 
 ```
 Program/
-├── data/
-│   └── processed/              # Data hasil optimasi
-│       ├── parsed_instance.json    # Data instance (depot, pelanggan, fleet)
-│       ├── parsed_distance.json    # Matriks jarak dan waktu
-│       ├── clusters.json           # Hasil clustering
-│       ├── initial_routes.json     # Rute awal dari NN
-│       ├── acs_routes.json         # Rute setelah ACS
-│       ├── rvnd_routes.json        # Rute setelah RVND
-│       └── final_solution.json     # Solusi akhir lengkap
+├── 📄 academic_replay.py       # Academic Replay Module (NEW!)
+├── 📄 acs_solver.py            # Ant Colony System
+├── 📄 distance_time.py         # Matriks jarak & waktu
+├── 📄 final_integration.py     # Integrasi dan validasi
+├── 📄 rvnd.py                  # RVND Optimization v2.0
+├── 📄 sweep_nn.py              # Sweep + Nearest Neighbor
+├── 📄 requirements.txt         # Dependencies
+├── 📄 README.md                # File ini
 │
-├── docs/                       # Dokumentasi
-│   ├── dokumentasi_id.md           # Dokumentasi lengkap (Bahasa Indonesia)
-│   └── final_summary.md            # Ringkasan hasil optimasi
+├── 📁 data/processed/          # Data hasil optimasi
+│   ├── parsed_instance.json        # Data instance
+│   ├── parsed_distance.json        # Matriks jarak
+│   ├── clusters.json               # Hasil clustering
+│   ├── initial_routes.json         # Rute awal (NN)
+│   ├── acs_routes.json             # Rute setelah ACS
+│   ├── rvnd_routes.json            # Rute setelah RVND
+│   ├── final_solution.json         # Solusi akhir
+│   └── academic_replay_results.json # Hasil Academic Replay
 │
-├── gui/                        # Aplikasi Streamlit
-│   ├── app.py                      # File utama dashboard
-│   ├── agents.py                   # Background agents
-│   ├── components/                 # Komponen UI
-│   └── tabs/                       # Tab-tab dashboard
-│       ├── input_titik.py              # Tab input koordinat
-│       ├── input_data.py               # Tab input data
-│       ├── hasil.py                    # Tab hasil optimasi
-│       └── graph_hasil.py              # Tab visualisasi grafik
+├── 📁 docs/                    # Dokumentasi
+│   ├── dokumentasi_id.md           # Dokumentasi lengkap
+│   ├── rvnd_specification.md       # Spesifikasi RVND
+│   └── final_summary.md            # Ringkasan hasil
 │
-├── distance_time.py            # Modul perhitungan jarak & waktu
-├── sweep_nn.py                 # Sweep Algorithm + Nearest Neighbor
-├── acs_solver.py               # Ant Colony System
-├── rvnd.py                     # RVND Optimization
-├── final_integration.py        # Integrasi dan validasi final
-└── README.md                   # File ini
+└── 📁 gui/                     # Aplikasi Streamlit
+    ├── app.py                      # File utama
+    ├── agents.py                   # Background agents
+    └── tabs/                       # Tab-tab dashboard
+        ├── input_titik.py
+        ├── input_data.py
+        ├── hasil.py
+        ├── graph_hasil.py
+        └── academic_replay.py      # Academic Replay UI
 ```
 
-## 📖 Fitur Dashboard
+---
 
-### 1️⃣ Input Titik
-- Input koordinat depot dan pelanggan
-- Validasi data input
-- Edit koordinat secara interaktif
+## ☁️ Deployment ke Streamlit Cloud
 
-### 2️⃣ Input Data
-- Input data pelanggan (demand, time windows)
-- Input data fleet (kapasitas, biaya)
-- Konfigurasi parameter optimasi
+### Langkah-langkah Deploy:
 
-### 3️⃣ Hasil Optimasi
-- Tabel detail rute per kendaraan
-- Total biaya (fixed + variable)
-- Jumlah kendaraan yang digunakan
-- Validasi constraint (kapasitas, time windows)
+1. **Fork/Push repository ke GitHub**
+   ```bash
+   git push origin main
+   ```
 
-### 4️⃣ Visualisasi Grafik
-- Peta rute dengan Plotly
-- Grafik perbandingan biaya
-- Timeline kunjungan pelanggan
-- Statistik penggunaan kendaraan
+2. **Buka [share.streamlit.io](https://share.streamlit.io)**
+
+3. **Klik "New app"** dan pilih:
+   - Repository: `Harunsatr/Route-Optimization`
+   - Branch: `main`
+   - Main file path: `Program/gui/app.py`
+
+4. **Klik "Deploy!"** - Aplikasi akan live dalam beberapa menit
+
+### File yang Diperlukan untuk Deploy:
+- ✅ `requirements.txt` - sudah ada
+- ✅ `gui/app.py` - entry point
+- ✅ `.gitignore` - sudah ada
+
+---
 
 ## 🔧 Konfigurasi
 
 ### Parameter Algoritma
 
-Parameter default dapat diubah di masing-masing file:
-
 **ACS Parameters** (`acs_solver.py`):
 ```python
 m = 2          # Jumlah semut
-alpha = 1      # Pengaruh pheromone
+alpha = 0.5    # Pengaruh pheromone (updated)
 beta = 2       # Pengaruh heuristic (jarak)
 rho = 0.2      # Evaporation rate
 q0 = 0.85      # Exploitation vs exploration
 iterations = 2 # Jumlah iterasi
 ```
 
-**RVND Parameters** (`rvnd.py`) - **NEW in v2.0**:
+**RVND Parameters** (`rvnd.py`):
 ```python
 MAX_INTER_ITERATIONS = 50   # Maksimal iterasi inter-route
 MAX_INTRA_ITERATIONS = 100  # Maksimal iterasi intra-route
 SEED = 84                   # Random seed untuk deterministic behavior
-
-# Intra-route neighborhoods
-["two_opt", "or_opt", "reinsertion", "exchange"]
-
-# Inter-route neighborhoods (multi-route scenarios)
-["shift_1_0", "shift_2_0", "swap_1_1", "swap_2_1", "swap_2_2", "cross"]
 ```
 
-### Data Input
+### Vehicle Types
 
-Data instance berada di `data/processed/parsed_instance.json` dengan struktur:
-```json
-{
-  "depot": {
-    "id": "depot",
-    "x": 0,
-    "y": 0
-  },
-  "customers": [
-    {
-      "id": "C1",
-      "x": 10,
-      "y": 20,
-      "demand": 50,
-      "ready_time": 0,
-      "due_time": 480,
-      "service_time": 15
-    }
-  ],
-  "fleet": [
-    {
-      "id": "motor",
-      "capacity": 100,
-      "fixed_cost": 50000,
-      "variable_cost_per_km": 2000
-    }
-  ]
-}
+| Type | Capacity | Fixed Cost | Variable Cost/km |
+|------|----------|------------|------------------|
+| A (Motor) | ≤ 60 | Rp 40,000 | Rp 1,000 |
+| B (Mobil Kecil) | 60-100 | Rp 60,000 | Rp 1,500 |
+| C (Mobil Besar) | 100-150 | Rp 80,000 | Rp 2,000 |
+
+---
+
+## 📊 Contoh Hasil Optimasi
+
+```
+📦 Total Clusters: 4
+🚗 Total Vehicles: 4
+
+Cluster 1: [C2, C4] - Demand: 40 - Vehicle: Type A
+Cluster 2: [C3, C6, C9] - Demand: 66 - Vehicle: Type B
+Cluster 3: [C1, C10] - Demand: 45 - Vehicle: Type A
+Cluster 4: [C5, C7, C8] - Demand: 64 - Vehicle: Type B
+
+💰 Total Cost: Rp 293,900
+⏰ Total Wait Time: 263.3 min
+✅ Time Window Violations: 0
 ```
 
-## 📊 Hasil Optimasi
-
-Hasil akhir tersimpan di `data/processed/final_solution.json` berisi:
-- Rute untuk setiap kendaraan
-- Total jarak dan waktu tempuh
-- Biaya total (fixed + variable)
-- Validasi semua constraint
-- Timeline kunjungan
-
-Contoh output rute:
-```json
-{
-  "vehicle_type": "mobil_kecil",
-  "route": ["depot", "C1", "C3", "C5", "depot"],
-  "total_distance": 45.2,
-  "total_cost": 140400,
-  "customers_served": 3
-}
-```
+---
 
 ## 🧪 Testing & Validasi
 
-Program melakukan validasi otomatis terhadap:
+Program melakukan validasi otomatis:
 - ✅ Semua pelanggan terlayani
 - ✅ Kapasitas kendaraan tidak melebihi batas
 - ✅ Time windows dipenuhi
 - ✅ Setiap rute dimulai dan berakhir di depot
 - ✅ Matriks jarak simetris
-- ✅ Tidak ada jarak negatif
+- ✅ Deterministic behavior (hasil sama dengan seed sama)
 
-### RVND Validation (v2.0)
-RVND v2.0 memiliki validasi ketat:
-- ✅ **Feasibility-first**: Hanya solusi feasible yang diterima
-- ✅ **Non-worsening**: Objective tidak pernah memburuk
-- ✅ **Deterministic**: Hasil sama dengan seed yang sama
-- ✅ **Early stopping**: Bounded computation time
+---
 
 ## 📖 Dokumentasi Lengkap
 
-### Core Documentation
-- [README.md](README.md) - Panduan utama (file ini)
-- [docs/dokumentasi_id.md](docs/dokumentasi_id.md) - Dokumentasi teknis lengkap
+| Document | Description |
+|----------|-------------|
+| [README.md](README.md) | Panduan utama (file ini) |
+| [docs/dokumentasi_id.md](docs/dokumentasi_id.md) | Dokumentasi teknis lengkap |
+| [docs/rvnd_specification.md](docs/rvnd_specification.md) | Spesifikasi algoritma RVND |
+| [docs/final_summary.md](docs/final_summary.md) | Ringkasan hasil optimasi |
 
-### RVND v2.0 Documentation (NEW)
-- [docs/rvnd_specification.md](docs/rvnd_specification.md) - Spesifikasi algoritma RVND lengkap
-- [docs/rvnd_implementation_summary.md](docs/rvnd_implementation_summary.md) - Ringkasan implementasi
-- [docs/rvnd_flow_diagram.md](docs/rvnd_flow_diagram.md) - Diagram alur algoritma
-
-### Summary Reports
-- [docs/final_summary.md](docs/final_summary.md) - Ringkasan hasil optimasi
+---
 
 ## 🤝 Kontribusi
 
-Kontribusi sangat diterima! Silakan:
 1. Fork repository ini
 2. Buat branch baru (`git checkout -b feature/AmazingFeature`)
 3. Commit perubahan (`git commit -m 'Add some AmazingFeature'`)
 4. Push ke branch (`git push origin feature/AmazingFeature`)
 5. Buat Pull Request
 
-## 📝 Lisensi
-
-Project ini dibuat untuk keperluan akademis/pembelajaran.
-
-## 👨‍💻 Author
-
-- **Harunsatr** - [GitHub](https://github.com/Harunsatr)
+---
 
 ## 📚 Referensi
 
-- Dorigo, M., & Gambardella, L. M. (1997). Ant colony system: a cooperative learning approach to the traveling salesman problem.
-- Hansen, P., & Mladenović, N. (2001). Variable neighborhood search: Principles and applications.
-- Gillett, B. E., & Miller, L. R. (1974). A heuristic algorithm for the vehicle-dispatch problem.
-
-## ❓ FAQ
-
-**Q: Program tidak bisa dijalankan, muncul error module not found?**
-A: Pastikan semua dependencies sudah terinstall dengan `pip install -r requirements.txt`
-
-**Q: Dashboard tidak menampilkan data?**
-A: Pastikan file-file JSON di folder `data/processed/` ada dan tidak corrupt. Jika perlu, jalankan ulang pipeline optimasi.
-
-**Q: Bagaimana cara mengubah data pelanggan?**
-A: Edit file `data/processed/parsed_instance.json` kemudian jalankan ulang pipeline optimasi.
-
-**Q: Apakah bisa digunakan untuk data yang lebih besar?**
-A: Ya, program dapat di-scale untuk lebih banyak pelanggan, tetapi perlu penyesuaian parameter algoritma dan waktu komputasi akan lebih lama.
-
-## 📞 Support
-
-Jika ada pertanyaan atau masalah, silakan buat issue di [GitHub Issues](https://github.com/Harunsatr/RVND/issues)
+- Dorigo, M., & Gambardella, L. M. (1997). *Ant colony system: a cooperative learning approach to the traveling salesman problem.*
+- Hansen, P., & Mladenović, N. (2001). *Variable neighborhood search: Principles and applications.*
+- Gillett, B. E., & Miller, L. R. (1974). *A heuristic algorithm for the vehicle-dispatch problem.*
 
 ---
 
-⭐ Jika project ini membantu, jangan lupa berikan star di GitHub!
+## 👨‍💻 Author
+
+**Harunsatr** - [GitHub](https://github.com/Harunsatr)
+
+---
+
+## 📝 Lisensi
+
+Project ini dilisensikan di bawah [MIT License](LICENSE).
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>Program tidak bisa dijalankan, muncul error module not found?</b></summary>
+Pastikan semua dependencies sudah terinstall dengan `pip install -r requirements.txt`
+</details>
+
+<details>
+<summary><b>Dashboard tidak menampilkan data?</b></summary>
+Pastikan file-file JSON di folder `data/processed/` ada dan tidak corrupt. Jika perlu, jalankan ulang pipeline optimasi.
+</details>
+
+<details>
+<summary><b>Bagaimana cara mengubah data pelanggan?</b></summary>
+Edit file `data/processed/parsed_instance.json` kemudian jalankan ulang pipeline optimasi.
+</details>
+
+<details>
+<summary><b>Apakah bisa di-deploy ke Netlify?</b></summary>
+Tidak, Netlify hanya untuk static sites. Streamlit membutuhkan Python backend server. Gunakan <b>Streamlit Cloud</b> (gratis) untuk deployment.
+</details>
+
+---
+
+## 📞 Support
+
+Jika ada pertanyaan atau masalah, silakan buat issue di [GitHub Issues](https://github.com/Harunsatr/Route-Optimization/issues)
+
+---
+
+⭐ **Jika project ini membantu, jangan lupa berikan star di GitHub!**
