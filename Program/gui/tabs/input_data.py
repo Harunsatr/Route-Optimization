@@ -15,6 +15,47 @@ if str(_gui_dir) not in sys.path:
 import agents
 
 
+def _update_vehicle_field(idx: int, field: str, value) -> None:
+    """Helper to update a vehicle field in session state."""
+    if idx < len(st.session_state["user_vehicles"]):
+        st.session_state["user_vehicles"][idx][field] = value
+        # Also update id if name changes
+        if field == "name":
+            st.session_state["user_vehicles"][idx]["id"] = value
+
+
+def _get_next_vehicle_letter() -> str:
+    """Get the next available vehicle letter (A, B, C, D, ...)."""
+    user_vehicles = st.session_state.get("user_vehicles", [])
+    
+    # Get all used letters
+    used_letters = set()
+    for v in user_vehicles:
+        name = v.get("name", "")
+        if name.startswith("Vehicle ") and len(name) > 8:
+            letter = name[8:]  # Get letter after "Vehicle "
+            if len(letter) == 1 and letter.isalpha():
+                used_letters.add(letter.upper())
+    
+    # Find next available letter
+    for i in range(26):
+        letter = chr(ord('A') + i)
+        if letter not in used_letters:
+            return letter
+    
+    # If all letters used, use AA, AB, etc.
+    return f"A{len(user_vehicles) + 1}"
+
+
+def _get_default_capacity_for_letter(letter: str) -> int:
+    """Get default capacity based on vehicle letter."""
+    # Default capacities: A=60, B=100, C=150, D+=200
+    defaults = {'A': 60, 'B': 100, 'C': 150}
+    if letter in defaults:
+        return defaults[letter]
+    return 200  # Default for D onwards
+
+
 def render_input_data() -> None:
     """Render Input Data tab with structured sections for vehicle capacity, iterations, demands, and distance matrix."""
     
@@ -23,8 +64,6 @@ def render_input_data() -> None:
     # Initialize session state
     if "inputData" not in st.session_state:
         st.session_state["inputData"] = {}
-    if "kapasitas_kendaraan" not in st.session_state:
-        st.session_state["kapasitas_kendaraan"] = 100
     if "iterasi" not in st.session_state:
         st.session_state["iterasi"] = 2
     if "last_loaded_file" not in st.session_state:
@@ -32,128 +71,126 @@ def render_input_data() -> None:
     if "distanceMatrix_size" not in st.session_state:
         st.session_state["distanceMatrix_size"] = 0
     
-    # Initialize vehicle selection state
-    if "vehicle_selection" not in st.session_state:
-        st.session_state["vehicle_selection"] = {
-            "A": {"enabled": True, "units": 2, "available_from": "08:00", "available_until": "17:00"},
-            "B": {"enabled": True, "units": 2, "available_from": "08:00", "available_until": "17:00"},
-            "C": {"enabled": True, "units": 1, "available_from": "08:00", "available_until": "17:00"}
-        }
+    # Initialize DYNAMIC vehicle list (user-defined, no defaults!)
+    if "user_vehicles" not in st.session_state:
+        st.session_state["user_vehicles"] = []  # Empty by default - user MUST add vehicles
     
     inputData = st.session_state["inputData"]
     
-    # ===== SECTION 1: Pemilihan Kendaraan (NEW!) =====
+    # ===== SECTION 1: Kendaraan User-Defined (DYNAMIC) =====
     with st.container():
         st.subheader("1️⃣ Pemilihan Kendaraan Hari Ini")
         st.markdown("*Pilih kendaraan yang **tersedia** untuk digunakan hari ini. Algoritma hanya akan menggunakan kendaraan yang Anda pilih.*")
         
-        vehicle_selection = st.session_state["vehicle_selection"]
+        user_vehicles = st.session_state["user_vehicles"]
         
-        # Vehicle A
-        col_a1, col_a2, col_a3, col_a4 = st.columns([1, 1, 1.5, 1.5])
-        with col_a1:
-            vehicle_selection["A"]["enabled"] = st.checkbox(
-                "🚛 Vehicle A (≤60)", 
-                value=vehicle_selection["A"]["enabled"],
-                key="chk_vehicle_a"
-            )
-        with col_a2:
-            vehicle_selection["A"]["units"] = st.number_input(
-                "Jumlah Unit", 
-                min_value=0, max_value=10, 
-                value=vehicle_selection["A"]["units"],
-                key="units_a",
-                disabled=not vehicle_selection["A"]["enabled"]
-            )
-        with col_a3:
-            vehicle_selection["A"]["available_from"] = st.text_input(
-                "Jam Mulai",
-                value=vehicle_selection["A"]["available_from"],
-                key="from_a",
-                disabled=not vehicle_selection["A"]["enabled"]
-            )
-        with col_a4:
-            vehicle_selection["A"]["available_until"] = st.text_input(
-                "Jam Selesai",
-                value=vehicle_selection["A"]["available_until"],
-                key="until_a",
-                disabled=not vehicle_selection["A"]["enabled"]
-            )
-        
-        # Vehicle B
-        col_b1, col_b2, col_b3, col_b4 = st.columns([1, 1, 1.5, 1.5])
-        with col_b1:
-            vehicle_selection["B"]["enabled"] = st.checkbox(
-                "🚚 Vehicle B (60-100)", 
-                value=vehicle_selection["B"]["enabled"],
-                key="chk_vehicle_b"
-            )
-        with col_b2:
-            vehicle_selection["B"]["units"] = st.number_input(
-                "Jumlah Unit ", 
-                min_value=0, max_value=10, 
-                value=vehicle_selection["B"]["units"],
-                key="units_b",
-                disabled=not vehicle_selection["B"]["enabled"]
-            )
-        with col_b3:
-            vehicle_selection["B"]["available_from"] = st.text_input(
-                "Jam Mulai ",
-                value=vehicle_selection["B"]["available_from"],
-                key="from_b",
-                disabled=not vehicle_selection["B"]["enabled"]
-            )
-        with col_b4:
-            vehicle_selection["B"]["available_until"] = st.text_input(
-                "Jam Selesai ",
-                value=vehicle_selection["B"]["available_until"],
-                key="until_b",
-                disabled=not vehicle_selection["B"]["enabled"]
-            )
-        
-        # Vehicle C
-        col_c1, col_c2, col_c3, col_c4 = st.columns([1, 1, 1.5, 1.5])
-        with col_c1:
-            vehicle_selection["C"]["enabled"] = st.checkbox(
-                "🚐 Vehicle C (100-150)", 
-                value=vehicle_selection["C"]["enabled"],
-                key="chk_vehicle_c"
-            )
-        with col_c2:
-            vehicle_selection["C"]["units"] = st.number_input(
-                "Jumlah Unit  ", 
-                min_value=0, max_value=10, 
-                value=vehicle_selection["C"]["units"],
-                key="units_c",
-                disabled=not vehicle_selection["C"]["enabled"]
-            )
-        with col_c3:
-            vehicle_selection["C"]["available_from"] = st.text_input(
-                "Jam Mulai  ",
-                value=vehicle_selection["C"]["available_from"],
-                key="from_c",
-                disabled=not vehicle_selection["C"]["enabled"]
-            )
-        with col_c4:
-            vehicle_selection["C"]["available_until"] = st.text_input(
-                "Jam Selesai  ",
-                value=vehicle_selection["C"]["available_until"],
-                key="until_c",
-                disabled=not vehicle_selection["C"]["enabled"]
-            )
-        
-        st.session_state["vehicle_selection"] = vehicle_selection
-        
-        # Summary
-        enabled_vehicles = [v for v, data in vehicle_selection.items() if data["enabled"] and data["units"] > 0]
-        if enabled_vehicles:
-            summary_parts = []
-            for v in enabled_vehicles:
-                data = vehicle_selection[v]
-                summary_parts.append(f"**{v}**: {data['units']} unit ({data['available_from']}–{data['available_until']})")
-            st.success("✅ Kendaraan aktif: " + ", ".join(summary_parts))
+        # Display existing vehicles
+        if user_vehicles:
+            for idx, vehicle in enumerate(user_vehicles):
+                vehicle_name = vehicle.get("name", f"Vehicle {chr(ord('A') + idx)}")
+                capacity = vehicle.get("capacity", 100)
+                
+                # Create a checkbox row for each vehicle
+                col_check, col_cap, col_units, col_from, col_until, col_del = st.columns([2.5, 1.5, 1, 1.2, 1.2, 0.5])
+                
+                with col_check:
+                    enabled = st.checkbox(
+                        f"🚛 **{vehicle_name}** (≤{capacity})",
+                        value=vehicle.get("enabled", True),
+                        key=f"veh_enabled_{idx}"
+                    )
+                    st.session_state["user_vehicles"][idx]["enabled"] = enabled
+                
+                with col_cap:
+                    cap_val = st.number_input(
+                        "Kapasitas",
+                        min_value=1,
+                        value=capacity,
+                        key=f"veh_cap_{idx}",
+                        disabled=not enabled,
+                        label_visibility="collapsed" if idx > 0 else "visible"
+                    )
+                    st.session_state["user_vehicles"][idx]["capacity"] = cap_val
+                
+                with col_units:
+                    units_val = st.number_input(
+                        "Jumlah Unit",
+                        min_value=1, max_value=10,
+                        value=vehicle.get("units", 2),
+                        key=f"veh_units_{idx}",
+                        disabled=not enabled,
+                        label_visibility="collapsed" if idx > 0 else "visible"
+                    )
+                    st.session_state["user_vehicles"][idx]["units"] = units_val
+                
+                with col_from:
+                    from_val = st.text_input(
+                        "Jam Mulai",
+                        value=vehicle.get("available_from", "08:00"),
+                        key=f"veh_from_{idx}",
+                        disabled=not enabled,
+                        label_visibility="collapsed" if idx > 0 else "visible"
+                    )
+                    st.session_state["user_vehicles"][idx]["available_from"] = from_val
+                
+                with col_until:
+                    until_val = st.text_input(
+                        "Jam Selesai",
+                        value=vehicle.get("available_until", "17:00"),
+                        key=f"veh_until_{idx}",
+                        disabled=not enabled,
+                        label_visibility="collapsed" if idx > 0 else "visible"
+                    )
+                    st.session_state["user_vehicles"][idx]["available_until"] = until_val
+                
+                with col_del:
+                    st.write("")  # Spacing for alignment
+                    if st.button("🗑️", key=f"del_veh_{idx}", help=f"Hapus {vehicle_name}"):
+                        st.session_state["user_vehicles"].pop(idx)
+                        st.rerun()
         else:
-            st.error("❌ Tidak ada kendaraan yang dipilih! Algoritma tidak dapat berjalan.")
+            st.info("ℹ️ Belum ada kendaraan. Klik tombol di bawah untuk menambahkan kendaraan pertama.")
+        
+        # Add new vehicle button
+        st.markdown("---")
+        
+        if st.button("➕ Tambah Kendaraan Baru", key="btn_add_vehicle", type="primary"):
+            next_letter = _get_next_vehicle_letter()
+            new_vehicle = {
+                "id": f"Vehicle {next_letter}",
+                "name": f"Vehicle {next_letter}",
+                "capacity": _get_default_capacity_for_letter(next_letter),
+                "units": 2,
+                "available_from": "08:00",
+                "available_until": "17:00",
+                "enabled": True,
+                "fixed_cost": 50000,
+                "variable_cost_per_km": 1000
+            }
+            st.session_state["user_vehicles"].append(new_vehicle)
+            st.rerun()
+        
+        # Summary of active vehicles
+        st.markdown("---")
+        if user_vehicles:
+            active_vehicles = [v for v in user_vehicles if v.get("enabled", True)]
+            inactive_vehicles = [v for v in user_vehicles if not v.get("enabled", True)]
+            
+            if active_vehicles:
+                active_summary = ", ".join([
+                    f"**{v['name']}**: {v['units']} unit ({v['available_from']}–{v['available_until']})"
+                    for v in active_vehicles
+                ])
+                st.success(f"✅ Kendaraan aktif: {active_summary}")
+            
+            if inactive_vehicles:
+                inactive_names = ", ".join([f"**{v['name']}**" for v in inactive_vehicles])
+                st.warning(f"❌ Kendaraan tidak aktif: {inactive_names}")
+            
+            if not active_vehicles:
+                st.error("⚠️ Tidak ada kendaraan aktif! Aktifkan minimal 1 kendaraan untuk menjalankan algoritma.")
+        else:
+            st.error("❌ **Tidak ada kendaraan!** Algoritma tidak dapat berjalan. Klik 'Tambah Kendaraan Baru' untuk menambahkan.")
     
     st.divider()
     
@@ -178,7 +215,7 @@ def render_input_data() -> None:
     
     # ===== SECTION 3: Permintaan Customer =====
     st.subheader("3️⃣ Permintaan Customer")
-    
+
     if "points" not in st.session_state or not st.session_state.points.get("customers"):
         st.info("ℹ️ Tambahkan customer di tab 'Input Titik' terlebih dahulu.")
     else:

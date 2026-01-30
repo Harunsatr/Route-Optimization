@@ -1,14 +1,17 @@
 # 🚛 MFVRPTW - Multi-Fleet Vehicle Routing Problem with Time Windows
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mfvrptw-optimizer.streamlit.app)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://harunsatr-rvnd.streamlit.app)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub](https://img.shields.io/badge/GitHub-Harunsatr%2FRVND-blue?logo=github)](https://github.com/Harunsatr/RVND)
 
 Sistem optimasi rute untuk distribusi obat dari gudang ke berbagai pelanggan (rumah sakit, klinik, puskesmas) menggunakan berbagai jenis kendaraan dengan batasan kapasitas dan time windows.
 
 ## 🌐 Live Demo
 
-**[🚀 Akses Aplikasi di Streamlit Cloud](https://mfvrptw-optimizer.streamlit.app)**
+> **Note**: Setelah deploy ke Streamlit Cloud, URL aplikasi akan tersedia di sini.
+> 
+> Contoh URL: `https://harunsatr-rvnd.streamlit.app`
 
 ---
 
@@ -172,26 +175,68 @@ Program/
 
 ## ☁️ Deployment ke Streamlit Cloud
 
+### Prasyarat
+- Akun GitHub dengan repository ini
+- Akun Streamlit Cloud (gratis di [share.streamlit.io](https://share.streamlit.io))
+
 ### Langkah-langkah Deploy:
 
-1. **Fork/Push repository ke GitHub**
-   ```bash
-   git push origin main
-   ```
+#### Step 1: Pastikan Repository Sudah di GitHub
+```bash
+# Cek remote repository
+git remote -v
+# Output: origin  https://github.com/Harunsatr/RVND.git
 
-2. **Buka [share.streamlit.io](https://share.streamlit.io)**
+# Push perubahan terbaru
+git add -A
+git commit -m "Update for Streamlit deployment"
+git push origin main
+```
 
-3. **Klik "New app"** dan pilih:
-   - Repository: `Harunsatr/Route-Optimization`
-   - Branch: `main`
-   - Main file path: `Program/gui/app.py`
+#### Step 2: Buka Streamlit Cloud
+1. Kunjungi **[share.streamlit.io](https://share.streamlit.io)**
+2. Klik **"Sign in with GitHub"**
+3. Authorize Streamlit untuk mengakses repository Anda
 
-4. **Klik "Deploy!"** - Aplikasi akan live dalam beberapa menit
+#### Step 3: Deploy Aplikasi Baru
+1. Klik tombol **"New app"** (pojok kanan atas)
+2. Isi form dengan:
+   | Field | Value |
+   |-------|-------|
+   | **Repository** | `Harunsatr/RVND` |
+   | **Branch** | `main` |
+   | **Main file path** | `gui/app.py` |
 
-### File yang Diperlukan untuk Deploy:
-- ✅ `requirements.txt` - sudah ada
-- ✅ `gui/app.py` - entry point
-- ✅ `.gitignore` - sudah ada
+3. Klik **"Deploy!"**
+
+#### Step 4: Tunggu Proses Build
+- Streamlit akan menginstall dependencies dari `requirements.txt`
+- Proses biasanya memakan waktu 2-5 menit
+- Setelah selesai, aplikasi akan live di URL seperti:
+  ```
+  https://[nama-app].streamlit.app
+  ```
+
+### ⚙️ File yang Diperlukan untuk Deploy
+| File | Status | Keterangan |
+|------|--------|------------|
+| `requirements.txt` | ✅ Ada | Dependencies Python |
+| `gui/app.py` | ✅ Ada | Entry point aplikasi |
+| `.streamlit/config.toml` | ✅ Ada | Konfigurasi tema |
+| `.gitignore` | ✅ Ada | Exclude files |
+
+### 🔧 Troubleshooting
+
+**Error: ModuleNotFoundError**
+- Pastikan semua package ada di `requirements.txt`
+- Jalankan `pip freeze > requirements.txt` untuk update
+
+**Error: File not found**
+- Pastikan path `gui/app.py` benar (relatif dari root repository)
+
+**Aplikasi lambat saat pertama kali load**
+- Normal untuk free tier Streamlit Cloud
+- Aplikasi "tidur" setelah tidak aktif beberapa waktu
 
 ---
 

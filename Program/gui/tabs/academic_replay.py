@@ -69,8 +69,9 @@ def _display_sweep_iterations(logs: List[Dict]) -> None:
 
 
 def _display_nn_iterations(logs: List[Dict]) -> None:
-    """Display Nearest Neighbor iterations."""
-    st.markdown("### 🔗 Nearest Neighbor - Initial Routes")
+    """Display Nearest Neighbor iterations with Time Window analysis."""
+    st.markdown("### 🔗 Nearest Neighbor - Initial Routes (TW-Aware)")
+    st.markdown("*ArrivalTime = DepartureTime + TravelTime | Wait if early | Reject if late*")
     
     nn_logs = [l for l in logs if l.get("phase") == "NN"]
     
@@ -81,14 +82,53 @@ def _display_nn_iterations(logs: List[Dict]) -> None:
         for cluster_id in sorted(clusters):
             with st.expander(f"Cluster {cluster_id}", expanded=True):
                 cluster_logs = [l for l in nn_logs if l["cluster_id"] == cluster_id]
-                df = pd.DataFrame([{
-                    "Step": l["step"],
-                    "From": l["from_node"],
-                    "To": l["to_node"],
-                    "Distance": l["distance"],
-                    "Description": l["description"]
-                } for l in cluster_logs])
+                
+                # Build table with TIME WINDOW data
+                rows = []
+                for l in cluster_logs:
+                    to_node = l.get("to_node", 0)
+                    arrival = l.get("arrival_time", "-")
+                    tw_start = l.get("tw_start", "-")
+                    tw_end = l.get("tw_end", "-")
+                    action = l.get("action", "")
+                    
+                    # Format time windows
+                    if to_node == 0:
+                        # Depot - no TW analysis needed
+                        tw_display = "-"
+                        status = "🏠 Depot"
+                    elif arrival != "-" and tw_start != "-" and tw_end != "-":
+                        tw_display = f"{_minutes_to_time(tw_start)} - {_minutes_to_time(tw_end)}"
+                        if action == "REJECTED":
+                            status = f"❌ LATE (Arrival {_minutes_to_time(arrival)} > TW_end)"
+                        elif arrival < tw_start:
+                            wait = tw_start - arrival
+                            status = f"⏳ WAIT {wait:.1f} min"
+                        else:
+                            status = "✅ OK"
+                    else:
+                        tw_display = "-"
+                        status = "-"
+                    
+                    rows.append({
+                        "Step": l["step"],
+                        "From → To": f"{l.get('from_node', 0)} → {to_node}",
+                        "Distance": l.get("distance", 0),
+                        "Arrival": _minutes_to_time(arrival) if arrival != "-" else "-",
+                        "TW (Start-End)": tw_display,
+                        "Status": status,
+                        "Description": l.get("description", "")[:50]
+                    })
+                
+                df = pd.DataFrame(rows)
                 st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Show rejected customers if any
+                rejected = [l for l in cluster_logs if l.get("action") == "REJECTED"]
+                if rejected:
+                    st.warning(f"⚠️ {len(rejected)} customer(s) rejected due to TW violations")
+                    for r in rejected:
+                        st.caption(f"Customer {r['to_node']}: {r.get('reason', '')}")
 
 
 def _display_acs_iterations(logs: List[Dict]) -> None:
@@ -115,6 +155,16 @@ def _display_acs_iterations(logs: List[Dict]) -> None:
             init = init_logs[0]
             st.markdown(f"**Pheromone Init:** τ₀ = {init['tau0']} ({init['formula']})")
         
+        # Objective function initialization
+        obj_init_logs = [l for l in cluster_logs if l.get("step") == "init_objective"]
+        if obj_init_logs:
+            obj = obj_init_logs[0]
+            st.markdown(f"**Objective Function:** {obj.get('formula', 'Z = αD + βT + γTW')}")
+            st.info(f"Initial Z = {obj.get('initial_objective', '?')} | "
+                   f"Distance: {obj.get('initial_distance', '?')} | "
+                   f"Time: {obj.get('initial_time', '?')} | "
+                   f"TW Violation: {obj.get('initial_tw_violation', 0)}")
+        
         # Iteration details
         iterations = set(l.get("iteration") for l in cluster_logs if l.get("iteration"))
         
@@ -129,17 +179,18 @@ def _display_acs_iterations(logs: List[Dict]) -> None:
                     for l in predefined_logs:
                         st.info(f"Ant {l.get('ant', '?')}: {l.get('route', [])} - {l.get('description', '')}")
                 
-                # Route evaluation (new format - distance only)
+                # Route evaluation (new format - with OBJECTIVE FUNCTION)
                 eval_logs = [l for l in iter_logs if l.get("step") == "route_evaluation"]
                 if eval_logs:
-                    st.markdown("**Route Evaluation (DISTANCE ONLY):**")
+                    st.markdown("**Route Evaluation (Z = αD + βT + γTW):**")
                     df = pd.DataFrame([{
                         "Ant": l.get("ant", "?"),
                         "Route": str(l.get("route", [])),
-                        "Distance": l.get("distance", 0),
-                        "Service Time": l.get("service_time", 0),
+                        "Distance (D)": l.get("distance", 0),
+                        "Time (T)": l.get("service_time", 0) + l.get("distance", 0),
                         "TW Violation": l.get("tw_violation", 0),
-                        "Wait Time": l.get("wait_time", 0)
+                        "Wait Time": l.get("wait_time", 0),
+                        "Objective (Z)": l.get("objective", "-")
                     } for l in eval_logs])
                     st.dataframe(df, use_container_width=True, hide_index=True)
                 
@@ -178,12 +229,16 @@ def _display_acs_iterations(logs: List[Dict]) -> None:
                     s = summary_logs[0]
                     best_route = s.get('best_route', [])
                     best_distance = s.get('best_distance', 0)
-                    # Handle both old (objective) and new (distance-only) formats
-                    if 'best_objective' in s:
-                        st.success(f"**Best Route:** {best_route} | Distance: {best_distance} | Objective: {s['best_objective']}")
-                    else:
-                        tw_viol = s.get('best_tw_violation', 0)
-                        st.success(f"**Best Route:** {best_route} | Distance: {best_distance} | TW Violation: {tw_viol}")
+                    best_objective = s.get('best_objective', "-")
+                    tw_viol = s.get('best_tw_violation', 0)
+                    acceptance = s.get('acceptance_criterion', "DISTANCE")
+                    
+                    # Display with objective function info
+                    st.markdown(f"**Acceptance Criterion:** `{acceptance}`")
+                    st.success(f"**Best Route:** {best_route} | "
+                              f"Distance: {best_distance} | "
+                              f"TW Violation: {tw_viol} | "
+                              f"**Objective Z = {best_objective}**")
 
 
 def _display_rvnd_inter_iterations(logs: List[Dict]) -> None:
@@ -386,7 +441,7 @@ def _display_vehicle_assignment(logs: List[Dict]) -> None:
 
 def _display_user_vehicle_selection(result: Dict[str, Any]) -> None:
     """Display user's vehicle selection and decision reasons."""
-    st.markdown("### 🚛 User Vehicle Selection")
+    st.markdown("### 🚛 Pemilihan Kendaraan User")
     st.markdown("*Kendaraan yang dipilih user di Input Data*")
     
     user_selection = result.get("user_vehicle_selection", [])
@@ -397,48 +452,57 @@ def _display_user_vehicle_selection(result: Dict[str, Any]) -> None:
         user_selection = [l for l in logs if l.get("phase") == "USER_VEHICLE_SELECTION"]
     
     if not user_selection:
-        st.info("Tidak ada data pemilihan kendaraan user. Menggunakan default.")
+        st.error("❌ Tidak ada kendaraan yang didefinisikan user!")
+        st.warning("Silakan tambah kendaraan di tab 'Input Data' terlebih dahulu.")
         return
     
     # Display selection table
     df = pd.DataFrame([{
-        "Kendaraan": s.get("vehicle_id", "?"),
+        "Kendaraan": s.get("vehicle_id", s.get("vehicle_name", "?")),
         "Kapasitas": s.get("capacity", 0),
-        "Dipilih": "✅ Ya" if s.get("enabled", False) else "❌ Tidak",
-        "Unit": s.get("units", 0) if s.get("enabled", False) else "-",
-        "Jam Operasional": f"{s.get('available_from', '-')}–{s.get('available_until', '-')}" if s.get("enabled", False) else "-",
-        "Status": s.get("status", "?")
+        "Status": "✅ Aktif" if s.get("enabled", False) else "❌ Tidak Aktif",
+        "Unit": s.get("units", 1) if s.get("enabled", False) else "-",
+        "Jam Mulai": s.get("available_from", "08:00") if s.get("enabled", False) else "-",
+        "Jam Selesai": s.get("available_until", "17:00") if s.get("enabled", False) else "-",
+        "Keterangan": s.get("status", "")
     } for s in user_selection])
     st.dataframe(df, use_container_width=True, hide_index=True)
     
-    # Summary
-    enabled = [s for s in user_selection if s.get("enabled", False)]
-    disabled = [s for s in user_selection if not s.get("enabled", False)]
+    # Summary metrics
+    active_vehicles = [s for s in user_selection if s.get("enabled", False)]
+    inactive_vehicles = [s for s in user_selection if not s.get("enabled", False)]
     
-    col1, col2 = st.columns(2)
+    total_units = sum(s.get("units", 1) for s in active_vehicles)
+    total_capacity = sum(s.get("capacity", 0) * s.get("units", 1) for s in active_vehicles)
+    
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Kendaraan Aktif", len(enabled))
+        st.metric("Kendaraan Aktif", len(active_vehicles))
     with col2:
-        st.metric("Kendaraan Tidak Aktif", len(disabled))
+        st.metric("Kendaraan Tidak Aktif", len(inactive_vehicles))
+    with col3:
+        st.metric("Total Unit", total_units)
+    with col4:
+        st.metric("Total Kapasitas", total_capacity)
     
     # Decision explanation
     st.markdown("---")
-    st.markdown("#### 📋 Penjelasan Keputusan")
+    st.markdown("#### 📋 Detail Pemilihan Kendaraan")
     
     for s in user_selection:
-        vid = s.get("vehicle_id", "?")
+        vid = s.get("vehicle_id", s.get("vehicle_name", "?"))
         enabled = s.get("enabled", False)
         status = s.get("status", "")
         
         if enabled:
-            st.success(f"**Vehicle {vid}**: {status}")
+            st.success(f"**{vid}**: {status}")
         else:
-            st.warning(f"**Vehicle {vid}**: {status}")
+            st.warning(f"**{vid}**: {status}")
     
     # Important note
     st.markdown("---")
-    st.info("📌 **Aturan Routing**: Algoritma HANYA menggunakan kendaraan yang dipilih user. "
-            "Kendaraan yang tidak dipilih TIDAK akan digunakan dalam Sweep, NN, ACS, maupun RVND.")
+    st.info("📌 **Aturan Routing**: Algoritma HANYA menggunakan kendaraan yang **aktif** (dicentang). "
+            "Kendaraan yang tidak aktif TIDAK akan digunakan dalam Sweep, NN, ACS, maupun RVND.")
 
 
 def _display_vehicle_availability(result: Dict[str, Any]) -> None:
@@ -616,26 +680,26 @@ def render_academic_replay() -> None:
     
     st.divider()
     
-    # Show current vehicle selection from Input Data
-    vehicle_selection = st.session_state.get("vehicle_selection", None)
-    if vehicle_selection:
-        st.markdown("### 🚛 Kendaraan yang Dipilih (dari Input Data)")
-        enabled = [f"**{v}** ({d['units']} unit, {d['available_from']}–{d['available_until']})" 
-                   for v, d in vehicle_selection.items() 
-                   if d.get("enabled", False) and d.get("units", 0) > 0]
-        disabled = [f"**{v}**" for v, d in vehicle_selection.items() 
-                    if not d.get("enabled", False) or d.get("units", 0) == 0]
+    # Show current user-defined vehicles from Input Data
+    user_vehicles = st.session_state.get("user_vehicles", [])
+    if user_vehicles and len(user_vehicles) > 0:
+        st.markdown("### 🚛 Kendaraan yang Didefinisikan User (dari Input Data)")
         
-        if enabled:
-            st.success(f"✅ Aktif: {', '.join(enabled)}")
-        if disabled:
-            st.warning(f"❌ Tidak aktif: {', '.join(disabled)}")
+        vehicle_info = []
+        for v in user_vehicles:
+            name = v.get("name", v.get("id", "?"))
+            cap = v.get("capacity", 0)
+            units = v.get("units", 1)
+            av_from = v.get("available_from", "08:00")
+            av_until = v.get("available_until", "17:00")
+            vehicle_info.append(f"**{name}** (Kapasitas: {cap}, {units} unit, {av_from}–{av_until})")
         
-        if not enabled:
-            st.error("⚠️ Tidak ada kendaraan yang dipilih! Silakan pilih kendaraan di tab 'Input Data' terlebih dahulu.")
-            return
+        st.success(f"✅ {len(user_vehicles)} kendaraan didefinisikan: " + ", ".join(vehicle_info))
     else:
-        st.info("ℹ️ Menggunakan kendaraan default. Pilih kendaraan di tab 'Input Data' untuk kontrol penuh.")
+        st.error("⚠️ **Tidak ada kendaraan yang didefinisikan!**")
+        st.warning("Silakan tambah kendaraan di tab **'Input Data'** terlebih dahulu sebelum menjalankan Academic Replay.")
+        st.info("💡 Klik tombol **'➕ Tambah Kendaraan Baru'** di tab Input Data untuk menambah kendaraan.")
+        return
     
     st.divider()
     
@@ -650,9 +714,9 @@ def render_academic_replay() -> None:
                     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
                     from academic_replay import run_academic_replay
                     
-                    # Pass vehicle selection from session state
-                    vehicle_selection = st.session_state.get("vehicle_selection", None)
-                    result = run_academic_replay(vehicle_selection=vehicle_selection)
+                    # Pass user-defined vehicles from session state
+                    user_vehicles = st.session_state.get("user_vehicles", [])
+                    result = run_academic_replay(user_vehicles=user_vehicles)
                     st.session_state["academic_result"] = result
                     st.success("Academic replay completed!")
                     st.rerun()
@@ -662,7 +726,7 @@ def render_academic_replay() -> None:
                     st.code(traceback.format_exc())
     
     with col2:
-        st.info("Klik untuk menjalankan validasi akademik. Algoritma hanya akan menggunakan kendaraan yang dipilih di Input Data.")
+        st.info("Klik untuk menjalankan validasi akademik. Algoritma hanya akan menggunakan kendaraan yang didefinisikan user di Input Data.")
     
     st.divider()
     

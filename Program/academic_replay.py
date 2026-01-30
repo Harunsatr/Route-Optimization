@@ -732,12 +732,28 @@ def academic_acs_cluster(
         "description": "Using PREDEFINED routes from Word document"
     })
     
+    # Compute initial objective function Z = αD + βT + γTW
+    initial_objective = compute_objective(initial_route, dataset)
+    initial_route["objective"] = initial_objective
+    
     best_route = initial_route
-    best_distance = initial_route["total_distance"]  # DISTANCE ONLY
+    best_objective = initial_objective  # OBJECTIVE FUNCTION (NOT DISTANCE ONLY!)
+    
+    iteration_logs.append({
+        "phase": "ACS",
+        "cluster_id": cluster["cluster_id"],
+        "step": "init_objective",
+        "initial_distance": initial_route["total_distance"],
+        "initial_time": initial_route["total_travel_time"] + initial_route["total_service_time"],
+        "initial_tw_violation": initial_route.get("total_tw_violation", 0),
+        "initial_objective": round(initial_objective, 2),
+        "formula": "Z = α×D + β×T + γ×TW_violation",
+        "description": f"Initial objective Z = {round(initial_objective, 2)}"
+    })
     
     for iteration in range(1, max_iterations + 1):
         iteration_best_route = None
-        iteration_best_distance = float('inf')
+        iteration_best_objective = float('inf')
         
         for ant in range(1, num_ants + 1):
             # GET PREDEFINED ROUTE from Word document
@@ -762,6 +778,10 @@ def academic_acs_cluster(
             route_result = evaluate_route(route, cluster, dataset, distance_matrix)
             route_distance = route_result["total_distance"]
             
+            # COMPUTE OBJECTIVE FUNCTION Z = α*D + β*T + γ*TW_violation (WORD FORMULA!)
+            route_objective = compute_objective(route_result, dataset)
+            route_result["objective"] = route_objective
+            
             # Log time window information (soft constraint)
             tw_violations = route_result.get("tw_violations_detail", [])
             if tw_violations:
@@ -776,6 +796,8 @@ def academic_acs_cluster(
                     "description": f"TW violations logged (soft constraint): {route_result['total_tw_violation']} min"
                 })
             
+            # Log with FULL OBJECTIVE FUNCTION
+            weights = dataset["objective_weights"]
             iteration_logs.append({
                 "phase": "ACS",
                 "cluster_id": cluster["cluster_id"],
@@ -784,11 +806,16 @@ def academic_acs_cluster(
                 "step": "route_evaluation",
                 "route": route,
                 "distance": route_distance,
+                "travel_time": route_result["total_travel_time"],
                 "service_time": route_result["total_service_time"],
+                "total_time": route_result["total_travel_time"] + route_result["total_service_time"],
                 "tw_violation": route_result["total_tw_violation"],
                 "wait_time": route_result.get("total_wait_time", 0),
-                "acceptance_criterion": "DISTANCE_ONLY",
-                "description": f"Route distance = {route_distance} (acceptance based on distance only)"
+                "objective_formula": f"Z = {weights['w1_distance']}×D + {weights['w2_time']}×T + {weights['w3_tw_violation']}×V",
+                "objective_calculation": f"Z = {weights['w1_distance']}×{route_distance} + {weights['w2_time']}×{route_result['total_travel_time'] + route_result['total_service_time']} + {weights['w3_tw_violation']}×{route_result['total_tw_violation']}",
+                "objective": round(route_objective, 2),
+                "acceptance_criterion": "OBJECTIVE_FUNCTION",
+                "description": f"Z = {round(route_objective, 2)} (acceptance based on Z = αD + βT + γTW)"
             })
             
             # Local pheromone update for educational purposes
@@ -798,9 +825,9 @@ def academic_acs_cluster(
                 new_tau = (1 - rho) * old_tau + rho * tau0
                 pheromone[(u, v)] = new_tau
             
-            # DISTANCE ONLY acceptance
-            if route_distance < iteration_best_distance:
-                iteration_best_distance = route_distance
+            # ACCEPTANCE BASED ON OBJECTIVE FUNCTION Z (NOT DISTANCE ONLY!)
+            if route_objective < iteration_best_objective:
+                iteration_best_objective = route_objective
                 iteration_best_route = route_result
         
         # Global pheromone update on iteration best
@@ -814,9 +841,9 @@ def academic_acs_cluster(
                 new_tau = (1 - rho) * old_tau + rho * delta
                 pheromone[(u, v)] = new_tau
         
-        # Update global best (DISTANCE ONLY)
-        if iteration_best_distance < best_distance:
-            best_distance = iteration_best_distance
+        # Update global best (OBJECTIVE FUNCTION!)
+        if iteration_best_objective < best_objective:
+            best_objective = iteration_best_objective
             best_route = iteration_best_route
             
             iteration_logs.append({
@@ -824,8 +851,9 @@ def academic_acs_cluster(
                 "cluster_id": cluster["cluster_id"],
                 "iteration": iteration,
                 "step": "new_best_found",
-                "new_best_distance": best_distance,
-                "description": f"New best route found: distance = {best_distance}"
+                "new_best_objective": round(best_objective, 2),
+                "new_best_distance": best_route["total_distance"],
+                "description": f"New best route found: Z = {round(best_objective, 2)}"
             })
         
         iteration_logs.append({
@@ -834,10 +862,11 @@ def academic_acs_cluster(
             "iteration": iteration,
             "step": "iteration_summary",
             "best_route": best_route["sequence"],
+            "best_objective": round(best_route.get("objective", best_objective), 2),
             "best_distance": best_route["total_distance"],
             "best_service_time": best_route["total_service_time"],
             "best_tw_violation": best_route.get("total_tw_violation", 0),
-            "acceptance_criterion": "DISTANCE_ONLY"
+            "acceptance_criterion": "OBJECTIVE_FUNCTION (Z = αD + βT + γTW)"
         })
     
     return best_route, iteration_logs
@@ -1675,18 +1704,19 @@ def validate_against_word(routes: List[Dict]) -> List[Dict]:
 # MAIN ACADEMIC REPLAY FUNCTION
 # ============================================================
 
-def run_academic_replay(vehicle_selection: Optional[Dict] = None) -> Dict:
+def run_academic_replay(user_vehicles: Optional[List[Dict]] = None) -> Dict:
     """
     Run the complete academic replay pipeline.
     
     Args:
-        vehicle_selection: Optional dict from user input, format:
-            {
-                "A": {"enabled": True, "units": 2, "available_from": "08:00", "available_until": "17:00"},
-                "B": {"enabled": True, "units": 2, "available_from": "08:00", "available_until": "17:00"},
-                "C": {"enabled": False, "units": 1, "available_from": "", "available_until": ""}
-            }
-        If None, uses default ACADEMIC_DATASET fleet.
+        user_vehicles: Optional list of user-defined vehicles, format:
+            [
+                {"id": "Truk A", "name": "Truk A", "capacity": 60, "units": 2, 
+                 "available_from": "08:00", "available_until": "17:00",
+                 "fixed_cost": 50000, "variable_cost_per_km": 1000},
+                {"id": "Truk B", "name": "Truk B", "capacity": 100, "units": 1, ...}
+            ]
+        If empty or None, algorithm CANNOT run - user MUST define vehicles.
     
     Returns:
         Dict with all iteration logs for display in UI.
@@ -1698,82 +1728,93 @@ def run_academic_replay(vehicle_selection: Optional[Dict] = None) -> Dict:
     dataset = deepcopy(ACADEMIC_DATASET)
     
     # ============================================================
-    # APPLY USER VEHICLE SELECTION (NEW!)
+    # APPLY USER-DEFINED VEHICLES (FULLY DYNAMIC!)
     # ============================================================
     user_vehicle_selection_log = []
     
-    if vehicle_selection:
-        print("\n[PRE] Applying User Vehicle Selection...")
+    if user_vehicles and len(user_vehicles) > 0:
+        print("\n[PRE] Applying User-Defined Vehicles...")
         
-        # Update fleet based on user selection
+        # Build fleet ONLY from ENABLED user-defined vehicles
         updated_fleet = []
-        for vehicle in dataset["fleet"]:
-            vid = vehicle["id"]
-            if vid in vehicle_selection:
-                user_sel = vehicle_selection[vid]
-                
-                # Check if vehicle is enabled by user
-                if user_sel.get("enabled", False) and user_sel.get("units", 0) > 0:
-                    # User enabled this vehicle - update availability times
-                    vehicle["units"] = user_sel.get("units", vehicle["units"])
-                    vehicle["available_from"] = user_sel.get("available_from", "")
-                    vehicle["available_until"] = user_sel.get("available_until", "")
-                    updated_fleet.append(vehicle)
-                    
-                    user_vehicle_selection_log.append({
-                        "phase": "USER_VEHICLE_SELECTION",
-                        "vehicle_id": vid,
-                        "capacity": vehicle["capacity"],
-                        "enabled": True,
-                        "units": vehicle["units"],
-                        "available_from": vehicle["available_from"],
-                        "available_until": vehicle["available_until"],
-                        "status": f"✅ Selected by user ({vehicle['units']} units, {vehicle['available_from']}–{vehicle['available_until']})"
-                    })
-                    print(f"   ✅ Vehicle {vid}: {vehicle['units']} units ({vehicle['available_from']}–{vehicle['available_until']})")
-                else:
-                    # User did NOT select this vehicle
-                    user_vehicle_selection_log.append({
-                        "phase": "USER_VEHICLE_SELECTION",
-                        "vehicle_id": vid,
-                        "capacity": vehicle["capacity"],
-                        "enabled": False,
-                        "units": 0,
-                        "available_from": "",
-                        "available_until": "",
-                        "status": "❌ NOT selected by user - will NOT be used"
-                    })
-                    print(f"   ❌ Vehicle {vid}: NOT selected by user")
-            else:
-                # Vehicle not in selection dict - use default but mark as not selected
+        for uv in user_vehicles:
+            vid = uv.get("id", uv.get("name", "Unknown"))
+            is_enabled = uv.get("enabled", True)  # Default to enabled if not specified
+            
+            vehicle = {
+                "id": vid,
+                "name": uv.get("name", vid),
+                "capacity": uv.get("capacity", 100),
+                "units": uv.get("units", 1),
+                "available_from": uv.get("available_from", "08:00"),
+                "available_until": uv.get("available_until", "17:00"),
+                "fixed_cost": uv.get("fixed_cost", 50000),
+                "variable_cost_per_km": uv.get("variable_cost_per_km", 1000)
+            }
+            
+            if is_enabled:
+                updated_fleet.append(vehicle)
                 user_vehicle_selection_log.append({
                     "phase": "USER_VEHICLE_SELECTION",
                     "vehicle_id": vid,
+                    "vehicle_name": vehicle["name"],
+                    "capacity": vehicle["capacity"],
+                    "enabled": True,
+                    "units": vehicle["units"],
+                    "available_from": vehicle["available_from"],
+                    "available_until": vehicle["available_until"],
+                    "status": f"✅ Aktif ({vehicle['units']} unit, {vehicle['available_from']}–{vehicle['available_until']})"
+                })
+                print(f"   ✅ Vehicle '{vid}': {vehicle['units']} unit, capacity {vehicle['capacity']}, {vehicle['available_from']}–{vehicle['available_until']}")
+            else:
+                user_vehicle_selection_log.append({
+                    "phase": "USER_VEHICLE_SELECTION",
+                    "vehicle_id": vid,
+                    "vehicle_name": vehicle["name"],
                     "capacity": vehicle["capacity"],
                     "enabled": False,
-                    "units": 0,
-                    "available_from": "",
-                    "available_until": "",
-                    "status": "❌ NOT in user selection - will NOT be used"
+                    "units": vehicle["units"],
+                    "available_from": vehicle["available_from"],
+                    "available_until": vehicle["available_until"],
+                    "status": "❌ Tidak aktif (dinonaktifkan oleh user)"
                 })
-                print(f"   ❌ Vehicle {vid}: NOT in user selection")
+                print(f"   ❌ Vehicle '{vid}': DISABLED by user")
         
-        # Replace fleet with only user-selected vehicles
+        # Replace fleet with ENABLED user-defined vehicles ONLY
         dataset["fleet"] = updated_fleet
-        print(f"   → {len(updated_fleet)} vehicle types selected by user for routing")
+        print(f"   → {len(updated_fleet)} vehicle types ACTIVE for routing")
+        
+        # Check if any vehicles are active
+        if len(updated_fleet) == 0:
+            print("   ❌ CRITICAL: All vehicles are disabled!")
+            return {
+                "mode": "ACADEMIC_REPLAY",
+                "error": "Semua kendaraan dinonaktifkan! Aktifkan minimal 1 kendaraan di tab 'Input Data'.",
+                "user_vehicle_selection": user_vehicle_selection_log,
+                "vehicle_availability": [],
+                "available_vehicles": [],
+                "dataset": dataset,
+                "clusters": [],
+                "routes": [],
+                "costs": {"total_cost": 0},
+                "iteration_logs": []
+            }
     else:
-        print("\n[PRE] Using default fleet (no user selection provided)")
-        for vehicle in dataset["fleet"]:
-            user_vehicle_selection_log.append({
-                "phase": "USER_VEHICLE_SELECTION",
-                "vehicle_id": vehicle["id"],
-                "capacity": vehicle["capacity"],
-                "enabled": True,
-                "units": vehicle["units"],
-                "available_from": vehicle.get("available_from", "08:00"),
-                "available_until": vehicle.get("available_until", "17:00"),
-                "status": f"✅ Default ({vehicle['units']} units)"
-            })
+        # NO USER VEHICLES = CANNOT RUN!
+        print("\n[PRE] ❌ CRITICAL: No vehicles defined by user!")
+        print("   User MUST add vehicles in Input Data tab before running.")
+        return {
+            "mode": "ACADEMIC_REPLAY",
+            "error": "Tidak ada kendaraan! Silakan tambah kendaraan di tab 'Input Data' terlebih dahulu.",
+            "user_vehicle_selection": [],
+            "vehicle_availability": [],
+            "available_vehicles": [],
+            "dataset": dataset,
+            "clusters": [],
+            "routes": [],
+            "costs": {"total_cost": 0},
+            "iteration_logs": []
+        }
     
     distance_matrix = build_distance_matrix(dataset)
     
