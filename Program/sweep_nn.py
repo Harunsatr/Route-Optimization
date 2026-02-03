@@ -102,6 +102,16 @@ def build_clusters(instance: dict) -> Tuple[List[dict], Dict[str, int]]:
 
 
 def nearest_neighbor_route(cluster: dict, instance: dict, distance_data: dict) -> dict:
+    """
+    Build route using Nearest Neighbor with Time Window awareness.
+    
+    TIME WINDOW LOGIC:
+    - ArrivalTime = DepartureTime_prev + TravelTime
+    - If arrival < TW_start: vehicle waits, service starts at TW_start
+    - If arrival > TW_end: mark violation (soft constraint)
+    - ServiceStart = max(arrival, TW_start)
+    - Departure = ServiceStart + ServiceTime
+    """
     node_index = {node["id"]: idx for idx, node in enumerate(distance_data["nodes"])}
     distance_matrix = distance_data["distance_matrix"]
     travel_matrix = distance_data["travel_time_matrix"]
@@ -115,6 +125,7 @@ def nearest_neighbor_route(cluster: dict, instance: dict, distance_data: dict) -
 
     customers = {customer["id"]: customer for customer in instance["customers"]}
 
+    # Build route sequence using Nearest Neighbor
     unvisited = set(cluster["customer_ids"])
     route_sequence = [0]
     current_node = 0
@@ -128,29 +139,41 @@ def nearest_neighbor_route(cluster: dict, instance: dict, distance_data: dict) -
         current_node = next_node
     route_sequence.append(0)
 
+    # Calculate route metrics with Time Window handling
     stops = []
     total_violation = 0.0
     total_distance = 0.0
+    total_wait_time = 0.0
+    total_service_time = 0.0
 
     prev_node = 0
-    prev_departure = depot_tw["start"] + depot_service
+    current_time = depot_tw["start"]  # Start at depot opening time
 
+    # Depot departure
     stops.append({
         "node_id": 0,
-        "arrival": depot_tw["start"],
-        "arrival_str": minutes_to_clock(depot_tw["start"]),
-        "departure": prev_departure,
-        "departure_str": minutes_to_clock(prev_departure),
+        "arrival": current_time,
+        "arrival_str": minutes_to_clock(current_time),
+        "departure": current_time + depot_service,
+        "departure_str": minutes_to_clock(current_time + depot_service),
         "wait": 0.0,
-        "violation": max(0.0, depot_tw["start"] - depot_tw["end"])
+        "violation": 0.0,
+        "tw_start": depot_tw["start"],
+        "tw_end": depot_tw["end"]
     })
+    current_time = current_time + depot_service  # Departure time
 
     for next_node in route_sequence[1:]:
+        # Travel to next node
         travel = travel_matrix[node_index[prev_node]][node_index[next_node]]
-        total_distance += distance_matrix[node_index[prev_node]][node_index[next_node]]
-        arrival_no_wait = prev_departure + travel
+        dist = distance_matrix[node_index[prev_node]][node_index[next_node]]
+        total_distance += dist
+        
+        # ARRIVAL TIME = previous departure + travel time
+        arrival_time = current_time + travel
 
         if next_node == 0:
+            # Return to depot
             tw_start = depot_tw["start"]
             tw_end = depot_tw["end"]
             service_time = depot_service
@@ -160,26 +183,38 @@ def nearest_neighbor_route(cluster: dict, instance: dict, distance_data: dict) -
             tw_end = parse_time_to_minutes(customer["time_window"]["end"])
             service_time = customer["service_time"]
 
-        arrival = max(tw_start, arrival_no_wait)
-        wait_time = max(0.0, tw_start - arrival_no_wait)
-        violation = max(0.0, arrival - tw_end)
-        departure = arrival + service_time
+        # WAIT: if arrival < TW_start, vehicle waits
+        wait_time = max(0.0, tw_start - arrival_time)
+        total_wait_time += wait_time
+        
+        # SERVICE STARTS at max(arrival, TW_start)
+        service_start = max(arrival_time, tw_start)
+        
+        # VIOLATION: if arrival > TW_end (using raw arrival, not service_start)
+        violation = max(0.0, arrival_time - tw_end)
+        
+        # Departure = service start + service time
+        departure = service_start + service_time
+        total_service_time += service_time
 
         if next_node != 0:
             total_violation += violation
 
         stops.append({
             "node_id": next_node,
-            "arrival": arrival,
-            "arrival_str": minutes_to_clock(arrival),
+            "raw_arrival": arrival_time,
+            "arrival": service_start,  # Service start time
+            "arrival_str": minutes_to_clock(service_start),
             "departure": departure,
             "departure_str": minutes_to_clock(departure),
             "wait": wait_time,
-            "violation": violation
+            "violation": violation,
+            "tw_start": tw_start,
+            "tw_end": tw_end
         })
 
         prev_node = next_node
-        prev_departure = departure
+        current_time = departure  # Next departure is after service
 
     return {
         "cluster_id": cluster["cluster_id"],
@@ -187,7 +222,10 @@ def nearest_neighbor_route(cluster: dict, instance: dict, distance_data: dict) -
         "sequence": route_sequence,
         "stops": stops,
         "total_distance": total_distance,
-        "total_tw_violation": total_violation
+        "total_tw_violation": total_violation,
+        "total_wait_time": total_wait_time,
+        "total_service_time": total_service_time,
+        "total_travel_time": total_distance  # Assuming speed = 1 km/min
     }
 
 
@@ -227,12 +265,19 @@ def main() -> None:
     print("PROGRESS:sweep_nn:100:done")
 
     total_demand = sum(cluster["total_demand"] for cluster in clusters)
+    total_distance = sum(route["total_distance"] for route in routes)
     violations = sum(route["total_tw_violation"] for route in routes)
+    wait_time = sum(route.get("total_wait_time", 0) for route in routes)
+    service_time = sum(route.get("total_service_time", 0) for route in routes)
+    
     print(
         "sweep_nn: clusters=", len(clusters),
         ", fleet_usage=", fleet_usage,
         ", total_demand=", total_demand,
+        ", total_distance=", round(total_distance, 2),
         ", tw_violation=", round(violations, 2),
+        ", wait_time=", round(wait_time, 2),
+        ", service_time=", round(service_time, 2),
         sep=""
     )
 
